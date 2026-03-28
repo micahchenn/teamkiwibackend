@@ -1,0 +1,91 @@
+# Render Blueprint: adjust names/plans and set secret env vars in the dashboard.
+# https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: teamkiwi-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: starter
+    healthCheckPath: /api/health/
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.production
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: DJANGO_SECRET_KEY
+        generateValue: true
+      - key: ALLOWED_HOSTS
+        sync: false
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: teamkiwi-redis
+          property: connectionString
+      - key: MONGO_URI
+        sync: false
+
+  - type: worker
+    name: teamkiwi-celery-worker
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    dockerCommand: celery -A config.celery worker -l info --concurrency=2
+    plan: starter
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.production
+      - key: DJANGO_SECRET_KEY
+        fromService:
+          type: web
+          name: teamkiwi-api
+          envVarKey: DJANGO_SECRET_KEY
+      - key: ALLOWED_HOSTS
+        fromService:
+          type: web
+          name: teamkiwi-api
+          envVarKey: ALLOWED_HOSTS
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: teamkiwi-redis
+          property: connectionString
+      - key: MONGO_URI
+        sync: false
+
+  - type: worker
+    name: teamkiwi-celery-beat
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    dockerCommand: celery -A config.celery beat -l info
+    plan: starter
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.production
+      - key: DJANGO_SECRET_KEY
+        fromService:
+          type: web
+          name: teamkiwi-api
+          envVarKey: DJANGO_SECRET_KEY
+      - key: ALLOWED_HOSTS
+        fromService:
+          type: web
+          name: teamkiwi-api
+          envVarKey: ALLOWED_HOSTS
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: teamkiwi-redis
+          property: connectionString
+      - key: MONGO_URI
+        sync: false
+
+  - type: keyvalue
+    name: teamkiwi-redis
+    plan: starter
+    maxmemoryPolicy: allkeys-lru
+    # Internal-only Redis (recommended); use 0.0.0.0/0 if you need public access.
+    ipAllowList: []

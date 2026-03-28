@@ -1,0 +1,187 @@
+"""
+Base Django settings. Override via DJANGO_SETTINGS_MODULE (local vs production).
+Render-friendly: no secrets here; use environment variables in production.py.
+"""
+import os
+from pathlib import Path
+from urllib.parse import quote_plus
+
+from dotenv import load_dotenv
+
+
+def _mongo_uri_from_env() -> str:
+    """
+    Full URI wins. Otherwise build Atlas-style URI from split credentials so
+    special characters in passwords (e.g. &) are URL-encoded via quote_plus.
+    """
+    uri = os.environ.get("MONGO_URI", "").strip()
+    if uri:
+        return uri
+
+    user = (os.environ.get("DATABASEUSERNAME") or os.environ.get("MONGO_USER") or "").strip()
+    password = os.environ.get("DATABASEPASSWORD")
+    if password is None:
+        password = os.environ.get("MONGO_PASSWORD")
+    password = password if isinstance(password, str) else ""
+
+    host = (os.environ.get("MONGO_CLUSTER_HOST") or "").strip()
+    db = (os.environ.get("MONGO_DB_NAME", "kiwiDB")).strip() or "kiwiDB"
+    app_name = (os.environ.get("MONGO_APP_NAME", "TeamKiwi")).strip() or "TeamKiwi"
+
+    if user and host:
+        return (
+            f"mongodb+srv://{quote_plus(user)}:{quote_plus(password)}@{host}/{db}"
+            f"?retryWrites=true&w=majority&appName={quote_plus(app_name)}"
+        )
+
+    return "mongodb://localhost:27017/kiwiDB"
+
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+# Load .env: backend/ first, then repo root (teamkiwibackend/.env) so either location works.
+load_dotenv(BASE_DIR.parent / ".env")
+load_dotenv(BASE_DIR / ".env")
+
+SECRET_KEY = os.environ.get(
+    "DJANGO_SECRET_KEY",
+    "dev-only-change-me-in-production-not-for-deploy",
+)
+
+DEBUG = False
+
+ALLOWED_HOSTS: list[str] = []
+
+INSTALLED_APPS = [
+    "django.contrib.admin",
+    "django.contrib.auth",
+    "django.contrib.contenttypes",
+    "django.contrib.sessions",
+    "django.contrib.messages",
+    "django.contrib.staticfiles",
+    "rest_framework",
+    "corsheaders",
+    "apps.core",
+    "apps.bookings",
+    "apps.locks",
+    "apps.payments",
+    "apps.webhooks",
+    "apps.notifications",
+]
+
+MIDDLEWARE = [
+    "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
+]
+
+ROOT_URLCONF = "config.urls"
+
+TEMPLATES = [
+    {
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "DIRS": [BASE_DIR / "templates"],
+        "APP_DIRS": True,
+        "OPTIONS": {
+            "context_processors": [
+                "django.template.context_processors.debug",
+                "django.template.context_processors.request",
+                "django.contrib.auth.context_processors.auth",
+                "django.contrib.messages.context_processors.messages",
+            ],
+        },
+    },
+]
+
+WSGI_APPLICATION = "config.wsgi.application"
+
+# Django default DB: lightweight metadata only. Domain data lives in MongoDB (later phases).
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": BASE_DIR / "db.sqlite3",
+    }
+}
+
+AUTH_PASSWORD_VALIDATORS = [
+    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
+    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
+    {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
+    {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
+]
+
+LANGUAGE_CODE = "en-us"
+TIME_ZONE = "UTC"
+USE_I18N = True
+USE_TZ = True
+
+STATIC_URL = "static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
+STORAGES = {
+    "default": {
+        "BACKEND": "django.core.files.storage.FileSystemStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+}
+
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# --- DRF (baseline; tighten per-view in later phases) ---
+REST_FRAMEWORK = {
+    "DEFAULT_RENDERER_CLASSES": [
+        "rest_framework.renderers.JSONRenderer",
+    ],
+    "DEFAULT_PARSER_CLASSES": [
+        "rest_framework.parsers.JSONParser",
+    ],
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": "100/hour",
+        "user": "1000/hour",
+    },
+}
+
+# CORS: restrict in production via env (comma-separated origins)
+CORS_ALLOWED_ORIGINS: list[str] = []
+
+# MongoDB (application data; repositories in later phases)
+MONGO_URI = _mongo_uri_from_env()
+# Used when MONGO_URI has no path (e.g. Atlas `...net/?appName=...`) — collections go here.
+MONGO_DB_NAME = (os.environ.get("MONGO_DB_NAME", "kiwiDB") or "kiwiDB").strip() or "kiwiDB"
+
+# Redis / Celery (horizontal scale: separate web and worker processes on Render)
+REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
+CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", REDIS_URL)
+CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", REDIS_URL)
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT = 60 * 30  # hard cap for runaway tasks
+
+# Integrations (placeholders for phase 2+)
+SEAM_API_KEY = os.environ.get("SEAM_API_KEY", "")
+# Default Seam lock when POST body omits device_id (optional).
+SEAM_DEVICE_ID = os.environ.get("DEVICE_ID", "").strip() or None
+# Override only if Seam documents a different base (default: https://connect.getseam.com)
+SEAM_API_BASE_URL = os.environ.get("SEAM_API_BASE_URL", "").strip()
+SQUARE_ACCESS_TOKEN = os.environ.get("SQUARE_ACCESS_TOKEN", "")
+SQUARE_WEBHOOK_SECRET = os.environ.get("SQUARE_WEBHOOK_SECRET", "")
+
+EMAIL_HOST = os.environ.get("EMAIL_HOST", "localhost")
+EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
+EMAIL_HOST_USER = os.environ.get("EMAIL_USER", "")
+EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_PASS", "")
+EMAIL_USE_TLS = os.environ.get("EMAIL_USE_TLS", "true").lower() in ("1", "true", "yes")
+DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "bookings@example.com")

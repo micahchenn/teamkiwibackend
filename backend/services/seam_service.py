@@ -1,0 +1,111 @@
+"""
+Seam Connect API client (server-side only).
+
+Auth: API key in Authorization: Bearer <key> — not a username/password.
+Official reference: https://docs.seam.co/latest/api/
+Test connectivity: POST https://connect.getseam.com/workspaces/get with body {}
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any
+
+import httpx
+
+DEFAULT_SEAM_BASE_URL = "https://connect.getseam.com"
+
+
+def _iso_utc_z(dt: datetime) -> str:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    s = dt.isoformat()
+    return s.replace("+00:00", "Z")
+
+
+class SeamAPIError(Exception):
+    def __init__(self, message: str, *, status_code: int | None = None, body: Any = None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.body = body
+
+
+class SeamService:
+    """
+    Thin wrapper around Seam's HTTP API. Use from the backend only; never send the API key to browsers.
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        base_url: str = DEFAULT_SEAM_BASE_URL,
+        timeout: float = 30.0,
+    ):
+        if not api_key or not api_key.strip():
+            raise ValueError("Seam API key is required")
+        self._api_key = api_key.strip()
+        self._base_url = base_url.rstrip("/")
+        self._timeout = timeout
+
+    def _post(self, path: str, json_body: dict[str, Any] | None = None) -> dict[str, Any]:
+        url = f"{self._base_url}{path if path.startswith('/') else '/' + path}"
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        try:
+            with httpx.Client(timeout=self._timeout) as client:
+                response = client.post(url, headers=headers, json=json_body or {})
+        except httpx.RequestError as e:
+            raise SeamAPIError(f"Seam request failed: {e}") from e
+
+        try:
+            data = response.json()
+        except ValueError:
+            data = {"raw": response.text}
+
+        if response.status_code >= 400:
+            raise SeamAPIError(
+                f"Seam API error ({response.status_code})",
+                status_code=response.status_code,
+                body=data,
+            )
+
+        if isinstance(data, dict) and data.get("ok") is False:
+            raise SeamAPIError("Seam API returned ok=false", status_code=response.status_code, body=data)
+
+        return data if isinstance(data, dict) else {"result": data}
+
+    def get_workspace(self) -> dict[str, Any]:
+        """Verify credentials and reachability; returns parsed JSON including `workspace`."""
+        return self._post("/workspaces/get", {})
+
+    def verify_connection(self) -> dict[str, Any]:
+        """Alias for a clear name when checking deploy / env configuration."""
+        return self.get_workspace()
+
+    def create_access_code(
+        self,
+        device_id: str,
+        code: str,
+        *,
+        name: str,
+        starts_at: datetime,
+        ends_at: datetime,
+    ) -> dict[str, Any]:
+        """
+        Program a PIN on the lock via Seam (time-bound window).
+        https://docs.seam.co/latest/api/access_codes/create
+        """
+        body: dict[str, Any] = {
+            "device_id": device_id,
+            "code": code,
+            "name": name,
+            "starts_at": _iso_utc_z(starts_at),
+            "ends_at": _iso_utc_z(ends_at),
+        }
+        return self._post("/access_codes/create", body)
