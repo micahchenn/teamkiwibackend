@@ -178,10 +178,34 @@ SEAM_DEVICE_ID = os.environ.get("DEVICE_ID", "").strip() or None
 SEAM_API_BASE_URL = os.environ.get("SEAM_API_BASE_URL", "").strip()
 SQUARE_ACCESS_TOKEN = os.environ.get("SQUARE_ACCESS_TOKEN", "")
 SQUARE_WEBHOOK_SECRET = os.environ.get("SQUARE_WEBHOOK_SECRET", "")
+# sandbox | production — matches Square Developer Dashboard
+SQUARE_ENVIRONMENT = os.environ.get("SQUARE_ENVIRONMENT", "sandbox").strip().lower()
+# Web Payments SDK + Payments API (Locations → copy Location ID)
+SQUARE_APPLICATION_ID = (
+    os.environ.get("SQUARE_APPLICATION_ID", "").strip()
+    or os.environ.get("REACT_APP_SQUARE_APPLICATION_ID", "").strip()
+)
+SQUARE_LOCATION_ID = os.environ.get("SQUARE_LOCATION_ID", "").strip()
+SQUARE_API_VERSION = os.environ.get("SQUARE_API_VERSION", "2024-11-20").strip()
 
-EMAIL_HOST = os.environ.get("EMAIL_HOST", "localhost")
+# SendGrid: API key used for v3 Mail Send (dynamic templates) and SMTP fallback.
+SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY", "").strip()
+# Dynamic transactional template (Dashboard → Email API → Dynamic Templates). Starts with d-.
+SENDGRID_DEFAULT_TEMPLATE_ID = (
+    os.environ.get("SENDGRID_DEFAULT_TEMPLATE_ID", "").strip()
+    or os.environ.get("SENDGRID_DEFUALT_TEMPLATE_ID", "").strip()  # common typo
+)
+SENDGRID_FROM_NAME = (os.environ.get("SENDGRID_FROM_NAME", "Team Kiwi") or "Team Kiwi").strip()
+# Optional JSON merged into dynamic_template_data (e.g. {"site_url": "https://...", "phone": "..."}).
+SENDGRID_TEMPLATE_EXTRA_JSON = os.environ.get("SENDGRID_TEMPLATE_EXTRA_JSON", "").strip()
+
+EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+EMAIL_HOST = os.environ.get("EMAIL_HOST", "smtp.sendgrid.net")
 EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "587"))
-EMAIL_HOST_USER = os.environ.get("EMAIL_USER", "")
-EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_PASS", "")
+EMAIL_HOST_USER = os.environ.get("EMAIL_USER", "apikey")
+EMAIL_HOST_PASSWORD = SENDGRID_API_KEY or os.environ.get("EMAIL_PASS", "")
 EMAIL_USE_TLS = os.environ.get("EMAIL_USE_TLS", "true").lower() in ("1", "true", "yes")
 DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "bookings@example.com")
+
+# Property calendar for visitStart/visitEnd (day-pass / nightly stays). Affects lock expiry (end of last day in this zone).
+BOOKING_TIMEZONE = (os.environ.get("BOOKING_TIMEZONE", "America/Chicago") or "America/Chicago").strip()

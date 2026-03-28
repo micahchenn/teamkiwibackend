@@ -1,0 +1,93 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="x-apple-disable-message-reformatting" />
+  <title>Booking confirmed</title>
+  <!--
+    SendGrid Dynamic Template — paste this into the CODE editor (HTML).
+    Variables match backend build_booking_dynamic_template_data() + SENDGRID_TEMPLATE_EXTRA_JSON.
+    Subject line: set in SendGrid template settings (e.g. "Your booking is confirmed — {{reference_id}}").
+  -->
+</head>
+<body style="margin:0;padding:0;background-color:#f4f1ec; font-family:Georgia,'Times New Roman',serif;-webkit-font-smoothing:antialiased;">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:#f4f1ec;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" style="max-width:600px;background-color:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 8px 24px rgba(0,0,0,0.06);">
+          <!-- Header -->
+          <tr>
+            <td style="background:linear-gradient(135deg,#1a3c34 0%,#2d6a5f 100%);padding:28px 32px;text-align:center;">
+              <p style="margin:0;font-size:13px;letter-spacing:0.2em;text-transform:uppercase;color:rgba(255,255,255,0.85);">{{brand_name}}</p>
+              <h1 style="margin:12px 0 0;font-size:26px;line-height:1.25;color:#ffffff;font-weight:400;">You’re all set</h1>
+            </td>
+          </tr>
+          <!-- Body -->
+          <tr>
+            <td style="padding:36px 40px 40px;color:#2c2c2c;font-size:16px;line-height:1.65;">
+              <p style="margin:0 0 20px;">Hi {{customer_name}},</p>
+              <p style="margin:0 0 24px;">Thanks for your payment. Your booking is confirmed.</p>
+
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background-color:#f8f6f3;border-radius:8px;border:1px solid #e8e4de;">
+                <tr>
+                  <td style="padding:20px 22px;">
+                    <p style="margin:0 0 8px;font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:#6b6560;">Reference</p>
+                    <p style="margin:0 0 18px;font-size:18px;font-family:ui-monospace,Menlo,Consolas,monospace;color:#1a3c34;">{{reference_id}}</p>
+                    <p style="margin:0 0 8px;font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:#6b6560;">Amount</p>
+                    <p style="margin:0 0 18px;font-size:22px;color:#1a3c34;">{{amount_display}}</p>
+                    <p style="margin:0 0 8px;font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:#6b6560;">Payment status</p>
+                    <p style="margin:0;font-size:16px;text-transform:capitalize;color:#2d6a5f;">{{payment_status}}</p>
+                  </td>
+                </tr>
+              </table>
+
+              {{#if has_access_codes}}
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:24px;background-color:#eef6f4;border-radius:8px;border:1px solid #c5ddd6;">
+                <tr>
+                  <td style="padding:18px 22px;">
+                    <p style="margin:0 0 14px;font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:#1a3c34;">Your door code(s)</p>
+                    {{#each access_codes}}
+                    <p style="margin:0 0 16px;font-size:15px;line-height:1.5;color:#2c2c2c;">
+                      <span style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:22px;font-weight:600;color:#1a3c34;letter-spacing:0.12em;">{{code}}</span>
+                      <span style="display:block;margin-top:6px;font-size:14px;color:#555;">{{lock_name}}{{#if lock_location}} — {{lock_location}}{{/if}}</span>
+                      <span style="display:block;margin-top:4px;font-size:12px;color:#888;">Active immediately through {{expires_at_central}} ({{property_timezone}})</span>
+                    </p>
+                    {{/each}}
+                  </td>
+                </tr>
+              </table>
+              {{/if}}
+
+              {{#if receipt_url}}
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin:28px auto 0;">
+                <tr>
+                  <td align="center" style="border-radius:8px;background-color:#1a3c34;">
+                    <a href="{{receipt_url}}" target="_blank" rel="noopener noreferrer" style="display:inline-block;padding:14px 28px;font-size:15px;font-weight:600;color:#ffffff;text-decoration:none;font-family:system-ui,-apple-system,sans-serif;">View Square receipt</a>
+                  </td>
+                </tr>
+              </table>
+              {{/if}}
+
+              {{#if site_url}}
+              <p style="margin:28px 0 0;font-size:15px;">
+                <a href="{{site_url}}" style="color:#2d6a5f;text-decoration:underline;">Visit our site</a>
+              </p>
+              {{/if}}
+
+              <p style="margin:32px 0 0;font-size:15px;color:#555;">If you have questions, reply to this email or contact us{{#if support_email}} at <a href="mailto:{{support_email}}" style="color:#2d6a5f;">{{support_email}}</a>{{/if}}.</p>
+              <p style="margin:24px 0 0;font-size:15px;color:#2c2c2c;">— {{brand_name}}</p>
+            </td>
+          </tr>
+          <!-- Footer -->
+          <tr>
+            <td style="padding:20px 40px 32px;border-top:1px solid #eee;font-size:12px;line-height:1.5;color:#888;text-align:center;">
+              This message was sent because a payment completed successfully for reference {{reference_id}}.
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

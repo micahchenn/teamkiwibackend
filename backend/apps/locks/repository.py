@@ -30,6 +30,15 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _as_utc_aware(dt: datetime | None) -> datetime | None:
+    """Mongo may return naive datetimes; Django/DRF use aware UTC — always compare aware."""
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 class AccessCodeRepository:
     def __init__(self):
         self._db = get_mongo_database()
@@ -43,6 +52,7 @@ class AccessCodeRepository:
         self._col.create_index([("code", ASCENDING)], unique=True, name="uniq_code")
         self._col.create_index([("expires_at", ASCENDING)], name="expires_at_1")
         self._col.create_index([("device_id", ASCENDING)], name="device_id_1", sparse=True)
+        self._col.create_index([("booking_id", ASCENDING)], name="booking_id_1", sparse=True)
         self._indexes_ensured = True
 
     def create(
@@ -129,6 +139,16 @@ class AccessCodeRepository:
         r = self._col.update_one({"_id": _id}, {"$set": payload})
         return r.matched_count > 0
 
+    def delete_by_id(self, oid: str) -> bool:
+        """Remove document by MongoDB ObjectId string (e.g. rollback if Seam sync fails)."""
+        self.ensure_indexes()
+        try:
+            _id = ObjectId(oid)
+        except InvalidId:
+            return False
+        r = self._col.delete_one({"_id": _id})
+        return r.deleted_count > 0
+
     def get_by_code(self, code: str) -> dict[str, Any] | None:
         self.ensure_indexes()
         if not code or len(code) != 6 or not code.isdigit():
@@ -139,10 +159,22 @@ class AccessCodeRepository:
         self._refresh_status_if_expired(doc)
         return self._serialize(doc)
 
+    def list_by_booking_id(self, booking_id: str) -> list[dict[str, Any]]:
+        """All access codes linked to a booking (e.g. Square referenceId). Newest first."""
+        self.ensure_indexes()
+        bid = (booking_id or "").strip()
+        if not bid:
+            return []
+        out: list[dict[str, Any]] = []
+        for doc in self._col.find({"booking_id": bid}).sort("created_at", -1):
+            self._refresh_status_if_expired(doc)
+            out.append(self._serialize(doc))
+        return out
+
     def _refresh_status_if_expired(self, doc: dict[str, Any]) -> None:
         now = _utcnow()
-        start = doc.get("starts_at")
-        exp = doc.get("expires_at")
+        start = _as_utc_aware(doc.get("starts_at"))
+        exp = _as_utc_aware(doc.get("expires_at"))
         if not start or not exp:
             return
         if now < start:
@@ -180,6 +212,7 @@ class AccessCodeRepository:
             "seam_access_code_id": doc.get("seam_access_code_id"),
             "seam_sync_status": doc.get("seam_sync_status"),
             "seam_sync_error": doc.get("seam_sync_error"),
+            "seam_error_body": doc.get("seam_error_body"),
         }
 
 

@@ -6,9 +6,11 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from apps.locks.access_code_name import seam_access_code_name
 from apps.locks.repository import get_access_code_repository
 from apps.locks.serializers import LockCodeCreateSerializer, LockCodeReadSerializer
 from apps.locks.seam import get_seam_service
+from apps.locks.seam_window import clamp_seam_window
 from services.seam_service import SeamAPIError
 
 
@@ -47,27 +49,42 @@ class LockCodeCreateView(APIView):
         expires = data["expires_at"]
         device_id = doc.get("device_id")
         prelinked_seam = ser.clean_optional_str("seam_access_code_id", data)
+        booking_ref = ser.clean_optional_str("booking_id", data) or doc.get("booking_id")
         out = {**doc, "seam_sync": "skipped"}
 
         if device_id and not prelinked_seam:
-            name = doc.get("lock_name") or f"Access {doc['code']}"
+            base = doc.get("lock_name") or "Access"
+            name = seam_access_code_name(
+                doc["code"],
+                lock_name_base=base,
+                booking_reference=booking_ref,
+            )
             try:
                 seam = get_seam_service()
             except ValueError as e:
-                repo.patch_by_id(
-                    doc["id"],
-                    {"seam_sync_status": "failed", "seam_sync_error": str(e)},
+                repo.delete_by_id(doc["id"])
+                return Response(
+                    {"detail": str(e), "seam_sync": "failed"},
+                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
                 )
-                out.update(seam_sync="failed", seam_sync_error=str(e))
-                return Response(out, status=status.HTTP_201_CREATED)
 
+            seam_window = clamp_seam_window(starts, expires)
+            if seam_window is None:
+                msg = "Access window already ended; cannot program lock."
+                repo.delete_by_id(doc["id"])
+                return Response(
+                    {"detail": msg, "seam_sync": "failed"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            seam_start, seam_end = seam_window
             try:
                 resp = seam.create_access_code(
                     device_id=device_id,
                     code=doc["code"],
                     name=name,
-                    starts_at=starts,
-                    ends_at=expires,
+                    starts_at=seam_start,
+                    ends_at=seam_end,
                 )
                 ac = resp.get("access_code") or {}
                 aid = ac.get("access_code_id")
@@ -77,25 +94,28 @@ class LockCodeCreateView(APIView):
                         "seam_access_code_id": aid,
                         "seam_sync_status": "ok",
                         "seam_sync_error": None,
+                        "seam_error_body": None,
+                        "starts_at": seam_start,
                     },
                 )
                 out.update(
                     seam_sync="ok",
                     seam_access_code_id=aid,
                     seam_sync_status="ok",
+                    starts_at=seam_start,
                 )
             except SeamAPIError as e:
                 err = str(e)[:2000]
-                repo.patch_by_id(
-                    doc["id"],
-                    {"seam_sync_status": "failed", "seam_sync_error": err},
-                )
                 body = getattr(e, "body", None)
-                out.update(
-                    seam_sync="failed",
-                    seam_sync_status="failed",
-                    seam_sync_error=err,
-                    seam_error_body=body,
+                repo.delete_by_id(doc["id"])
+                return Response(
+                    {
+                        "detail": "Seam could not program the lock; access code was not saved.",
+                        "seam_sync": "failed",
+                        "seam_sync_error": err,
+                        "seam_error_body": body,
+                    },
+                    status=status.HTTP_502_BAD_GATEWAY,
                 )
 
         return Response(out, status=status.HTTP_201_CREATED)

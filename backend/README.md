@@ -6,7 +6,7 @@ Django + DRF skeleton prepared for **horizontal scaling on Render**: stateless w
 
 - `config/` — project settings (`local` vs `production`), URLs, WSGI/ASGI, Celery app
 - `apps/` — bounded contexts (`core`, `bookings`, `locks`, `payments`, `webhooks`, `notifications`)
-- `services/` — external integrations (to be added)
+- `services/` — Seam, Square (`services/square_service.py`), Mongo helpers
 - `docker-compose.yml` — local web + worker + beat + Redis + MongoDB
 
 ## Local development
@@ -147,6 +147,28 @@ A starter blueprint lives at repo root: `render.yaml`. Adjust service names, pla
 
 See `.env.example`. Production settings **require** `DJANGO_SECRET_KEY`, `ALLOWED_HOSTS`, and `CORS_ALLOWED_ORIGINS`.
 
+## MongoDB (`kiwiDB`)
+
+| Collection | Purpose | Keys / notes |
+|------------|---------|----------------|
+| **`bookings`** | Square checkout + customer + structured `booking` (visit dates, guests, pricing). | **Unique** `reference_id` (UUID from frontend). Stores `square_payment_id`, `receipt_url`, `payment_status` after charge. |
+| **`lock_access_codes`** | 6-digit PINs, Seam metadata, optional `booking_id` later. | **Unique** `code`. |
+
+Relationships are **document-based**: link future flows with explicit IDs (e.g. store `reference_id` on a lock code when a booking is paid).
+
+## Square checkout (React Web Payments SDK)
+
+Set **`SQUARE_LOCATION_ID`** in `.env` (Square Dashboard → Locations). **`SQUARE_APPLICATION_ID`** defaults from **`REACT_APP_SQUARE_APPLICATION_ID`** or **`SQUARE_APPLICATION_ID`**.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/square/config` | Returns `{ "applicationId", "locationId" }` for the card form. **503** + `{ "error" }` if not configured. |
+| POST | `/api/square/payments` | Body: `sourceId`, `amountCents`, `currency`, `referenceId` (UUID), optional `note`, `customerName`, `customerEmail`, `customerPhone`, `booking` (must include `totalCents` matching `amountCents`). |
+
+**Success (200):** `{ "success", "paymentId", "status", "receiptUrl", "referenceId", "booking" }`. **Errors:** `{ "error": "..." }` with 400 / 502 as appropriate.
+
+**CORS (local):** `config.settings.local` allows `http://localhost:3000` and Vite `5173` by default.
+
 ## Lock codes (MongoDB + Seam)
 
 **Flow:** the API generates a **random 6-digit** code (`secrets`), saves it in MongoDB (`kiwiDB.lock_access_codes`), then—if the request includes a Seam **`device_id`** (in JSON or env **`DEVICE_ID`** as default)—calls Seam [`/access_codes/create`](https://docs.seam.co/latest/api/access_codes/create) to program that PIN on the lock for `starts_at` → `expires_at`. The JSON response includes **`seam_sync`**: `ok` | `failed` | `skipped` (skipped when `device_id` is omitted or you pre-filled `seam_access_code_id`).
@@ -198,6 +220,6 @@ python manage.py seam_verify
 
 From code, use `apps.locks.seam.get_seam_service()` which returns a `SeamService` backed by `services/seam_service.py`.
 
-## Phase 1 scope
+## Roadmap
 
-Project structure, split settings, DRF baseline throttling, Celery wiring, Docker, Compose, Render-oriented docs, and health endpoints. Booking APIs, Mongo repositories, Square/Seam, and email come in later phases.
+Webhooks (Square/Seam), email receipts, and tighter booking ↔ lock linking can build on the `bookings` + `lock_access_codes` collections.
