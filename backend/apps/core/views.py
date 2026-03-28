@@ -9,6 +9,19 @@ logger = logging.getLogger(__name__)
 
 
 @require_GET
+def api_root(_request):
+    """GET / — avoids 404 when the base URL is opened; documents real API paths."""
+    return JsonResponse(
+        {
+            "service": "Team Kiwi API",
+            "health": "/api/health/",
+            "square_config": "/api/square/config",
+            "square_payments": "/api/square/payments",
+        }
+    )
+
+
+@require_GET
 def health_live(_request):
     """Liveness: process is up (use for load balancer / Render health checks)."""
     return JsonResponse({"status": "ok"})
