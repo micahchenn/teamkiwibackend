@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from django.conf import settings
 from django.utils import timezone as dj_tz
 from rest_framework import status
 from rest_framework.response import Response
@@ -88,6 +89,21 @@ class LockCodeCreateView(APIView):
                 )
                 ac = resp.get("access_code") or {}
                 aid = ac.get("access_code_id")
+                if not aid:
+                    raise SeamAPIError(
+                        "Seam access_codes/create did not return access_code_id",
+                        body=resp,
+                    )
+                if not getattr(settings, "SEAM_SKIP_ACCESS_CODE_SET_POLL", False):
+                    seam.wait_until_access_code_set_on_device(
+                        aid,
+                        timeout_seconds=float(
+                            getattr(settings, "SEAM_ACCESS_CODE_SET_TIMEOUT_SECONDS", 120.0)
+                        ),
+                        poll_interval_seconds=float(
+                            getattr(settings, "SEAM_ACCESS_CODE_POLL_INTERVAL_SECONDS", 2.0)
+                        ),
+                    )
                 repo.patch_by_id(
                     doc["id"],
                     {

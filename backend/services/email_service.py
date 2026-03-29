@@ -38,6 +38,77 @@ def _smtp_configured() -> bool:
     return bool(getattr(settings, "EMAIL_HOST_PASSWORD", None))
 
 
+def _admin_notification_recipients() -> list[str]:
+    raw = getattr(settings, "ADMIN_EMAIL_NOTIFICATIONS", None) or ""
+    return [x.strip() for x in str(raw).split(",") if x.strip()]
+
+
+def send_admin_access_code_failure_email(
+    *,
+    reference_id: str,
+    customer_name: str | None,
+    customer_email: str | None,
+    error_message: str,
+    error_body: Any = None,
+    guest_received_backup_pin: bool = False,
+) -> None:
+    """
+    Notify operators when primary Seam PIN provisioning fails (create, poll, or missing API).
+    Safe to call from provisioning: failures here are logged and do not raise.
+    """
+    recipients = _admin_notification_recipients()
+    if not recipients:
+        return
+
+    from_email = (getattr(settings, "DEFAULT_FROM_EMAIL", None) or "").strip()
+    if not from_email:
+        logger.warning("ADMIN_EMAIL_NOTIFICATIONS set but DEFAULT_FROM_EMAIL is empty; skipping admin alert.")
+        return
+
+    subj = f"[Access code] Failed for booking {reference_id}"
+    lines = [
+        "Primary door code could not be created or confirmed on the lock via Seam.",
+        "",
+        f"Reference: {reference_id}",
+        f"Guest: {(customer_name or '').strip() or '(none)'}",
+        f"Guest email: {(customer_email or '').strip() or '(none)'}",
+        "",
+        f"Error: {error_message}",
+    ]
+    if error_body is not None:
+        try:
+            lines.extend(["", "Detail:", json.dumps(error_body, default=str, indent=2)[:8000]])
+        except Exception:
+            lines.extend(["", "Detail:", str(error_body)[:8000]])
+    lines.extend(
+        [
+            "",
+            "Guest outcome:",
+            (
+                "Backup PIN was emailed to the guest (SEAM_BACKUP_STATIC_CODE)."
+                if guest_received_backup_pin
+                else "No backup PIN configured — guest did NOT receive a door code in email."
+            ),
+        ]
+    )
+    body = "\n".join(lines)
+
+    try:
+        send_mail(
+            subject=subj,
+            message=body,
+            from_email=from_email,
+            recipient_list=recipients,
+            fail_silently=False,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to send admin access-code alert for reference %s to %s",
+            reference_id,
+            recipients,
+        )
+
+
 def _fmt_code_dt(value: Any) -> str:
     if value is None:
         return ""
@@ -202,6 +273,43 @@ def send_dynamic_template_email(
             r.text,
         )
         r.raise_for_status()
+
+
+def collect_booking_confirmation_recipients(
+    customer_email: str | None,
+    booking: dict[str, Any] | None,
+) -> list[str]:
+    """
+    Emails that should receive the booking confirmation (same content).
+
+    Includes the payer ``customerEmail`` plus optional ``booking.guestEmails`` (list or
+    comma/semicolon-separated string). Deduped case-insensitively; payer first when present.
+    """
+    seen: set[str] = set()
+    ordered: list[str] = []
+
+    def _add(raw: str | None) -> None:
+        if not raw or not str(raw).strip():
+            return
+        e = str(raw).strip()
+        key = e.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        ordered.append(e)
+
+    _add(customer_email)
+    if not booking:
+        return ordered
+    extras = booking.get("guestEmails") or booking.get("guest_emails")
+    if isinstance(extras, str):
+        for part in extras.replace(";", ",").split(","):
+            _add(part)
+    elif isinstance(extras, list):
+        for item in extras:
+            if isinstance(item, str):
+                _add(item)
+    return ordered
 
 
 def send_booking_confirmation_email(

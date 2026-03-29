@@ -187,6 +187,24 @@ SEAM_BACKUP_STATIC_CODE = os.environ.get("SEAM_BACKUP_STATIC_CODE", "").strip() 
 SEAM_BACKUP_LOCK_NAME = (os.environ.get("SEAM_BACKUP_LOCK_NAME", "") or "KIWIBACKUPKEY").strip() or "KIWIBACKUPKEY"
 # Override only if Seam documents a different base (default: https://connect.getseam.com)
 SEAM_API_BASE_URL = os.environ.get("SEAM_API_BASE_URL", "").strip()
+# After access_codes/create, poll access_codes/get until status is ``set`` (PIN on physical lock).
+try:
+    SEAM_ACCESS_CODE_SET_TIMEOUT_SECONDS = float(
+        os.environ.get("SEAM_ACCESS_CODE_SET_TIMEOUT_SECONDS", "120")
+    )
+except ValueError:
+    SEAM_ACCESS_CODE_SET_TIMEOUT_SECONDS = 120.0
+try:
+    SEAM_ACCESS_CODE_POLL_INTERVAL_SECONDS = float(
+        os.environ.get("SEAM_ACCESS_CODE_POLL_INTERVAL_SECONDS", "2")
+    )
+except ValueError:
+    SEAM_ACCESS_CODE_POLL_INTERVAL_SECONDS = 2.0
+SEAM_SKIP_ACCESS_CODE_SET_POLL = os.environ.get("SEAM_SKIP_ACCESS_CODE_SET_POLL", "").lower() in (
+    "1",
+    "true",
+    "yes",
+)
 SQUARE_ACCESS_TOKEN = os.environ.get("SQUARE_ACCESS_TOKEN", "")
 SQUARE_WEBHOOK_SECRET = os.environ.get("SQUARE_WEBHOOK_SECRET", "")
 # sandbox | production — matches Square Developer Dashboard
@@ -217,6 +235,9 @@ EMAIL_HOST_USER = os.environ.get("EMAIL_USER", "apikey")
 EMAIL_HOST_PASSWORD = SENDGRID_API_KEY or os.environ.get("EMAIL_PASS", "")
 EMAIL_USE_TLS = os.environ.get("EMAIL_USE_TLS", "true").lower() in ("1", "true", "yes")
 DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "bookings@example.com")
+
+# Comma-separated — alerts when Seam / door code provisioning fails (Square payment flow).
+ADMIN_EMAIL_NOTIFICATIONS = os.environ.get("ADMIN_EMAIL_NOTIFICATIONS", "").strip()
 
 # Property calendar for visitStart/visitEnd (day-pass / nightly stays). Affects lock expiry (end of last day in this zone).
 BOOKING_TIMEZONE = (os.environ.get("BOOKING_TIMEZONE", "America/Chicago") or "America/Chicago").strip()

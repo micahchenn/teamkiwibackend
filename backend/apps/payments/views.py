@@ -8,7 +8,10 @@ from rest_framework.views import APIView
 from apps.locks.provisioning import ensure_access_code_for_square_payment
 from apps.payments.repository import get_booking_repository
 from apps.payments.serializers import SquarePaymentRequestSerializer
-from services.email_service import send_booking_confirmation_email
+from services.email_service import (
+    collect_booking_confirmation_recipients,
+    send_booking_confirmation_email,
+)
 from services.square_service import SquareAPIError, SquarePaymentService, get_square_payment_service
 
 
@@ -141,22 +144,19 @@ class SquarePaymentView(APIView):
         seam_sync_failed = provision.seam_sync_failed if provision else False
         used_backup_access = provision.used_backup_access if provision else False
 
-        if (
-            customer_email
-            and payment_status == "paid"
-            and not seam_sync_failed
-        ):
-            send_booking_confirmation_email(
-                customer_email,
-                customer_name=(d.get("customerName") or "").strip() or None,
-                reference_id=reference_id,
-                amount_cents=amount_cents,
-                currency=currency,
-                receipt_url=receipt_url,
-                payment_status=payment_status,
-                access_code_docs=access_codes,
-                booking=booking_dict,
-            )
+        if payment_status == "paid" and not seam_sync_failed:
+            for to_addr in collect_booking_confirmation_recipients(customer_email, booking_dict):
+                send_booking_confirmation_email(
+                    to_addr,
+                    customer_name=(d.get("customerName") or "").strip() or None,
+                    reference_id=reference_id,
+                    amount_cents=amount_cents,
+                    currency=currency,
+                    receipt_url=receipt_url,
+                    payment_status=payment_status,
+                    access_code_docs=access_codes,
+                    booking=booking_dict,
+                )
 
         lock_ok = bool(access_codes) and not seam_sync_failed
         lock_message = None

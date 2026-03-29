@@ -9,6 +9,7 @@ Test connectivity: POST https://connect.getseam.com/workspaces/get with body {}
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -141,6 +142,53 @@ class SeamService:
                 matches[0],
             )
         return matches[0]
+
+    def get_access_code(self, access_code_id: str) -> dict[str, Any]:
+        """POST /access_codes/get — https://docs.seam.co/latest/api/access_codes/get"""
+        data = self._post("/access_codes/get", {"access_code_id": access_code_id})
+        ac = data.get("access_code")
+        return ac if isinstance(ac, dict) else {}
+
+    def wait_until_access_code_set_on_device(
+        self,
+        access_code_id: str,
+        *,
+        timeout_seconds: float = 120.0,
+        poll_interval_seconds: float = 2.0,
+    ) -> dict[str, Any]:
+        """
+        Poll until Seam reports ``status`` ``set`` (PIN actually on the lock), or errors/time out.
+
+        ``create`` returning HTTP 200 only means the job was accepted; the lock may still be
+        ``setting`` until this returns.
+        """
+        deadline = time.monotonic() + max(5.0, float(timeout_seconds))
+        interval = max(0.5, float(poll_interval_seconds))
+        last: dict[str, Any] = {}
+        last_status: str | None = None
+        while time.monotonic() < deadline:
+            last = self.get_access_code(access_code_id)
+            status = (last.get("status") or "").strip().lower()
+            last_status = status
+            errors = last.get("errors")
+            if isinstance(errors, list) and len(errors) > 0:
+                raise SeamAPIError(
+                    f"Access code reported device errors before status=set: {errors!r}",
+                    body=last,
+                )
+            if status == "set":
+                return last
+            if status == "unknown":
+                raise SeamAPIError(
+                    "Access code status is unknown (check device connectivity in Seam).",
+                    body=last,
+                )
+            time.sleep(interval)
+        raise SeamAPIError(
+            f"Timed out after {timeout_seconds}s waiting for PIN on physical lock "
+            f"(last status={last_status!r}).",
+            body=last,
+        )
 
     def create_access_code(
         self,

@@ -15,6 +15,13 @@ class BookingPayloadSerializer(serializers.Serializer):
     people = serializers.IntegerField(required=False, min_value=1)
     dayPassCents = serializers.IntegerField(required=False, min_value=0)
     totalCents = serializers.IntegerField(required=True, min_value=1)
+    # Extra recipients for confirmation + door code (deduped with customerEmail). Optional.
+    guestEmails = serializers.ListField(
+        child=serializers.EmailField(),
+        required=False,
+        allow_empty=True,
+        default=list,
+    )
 
 
 class SquarePaymentRequestSerializer(serializers.Serializer):

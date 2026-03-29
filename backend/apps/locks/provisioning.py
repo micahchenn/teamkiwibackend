@@ -19,6 +19,7 @@ from apps.locks.booking_timezone import parse_visit_dates, utc_now, visit_end_to
 from apps.locks.repository import get_access_code_repository
 from apps.locks.seam import get_seam_service
 from apps.locks.seam_resolve import resolve_seam_device_id_for_payment
+from services.email_service import send_admin_access_code_failure_email
 from services.seam_service import SeamAPIError
 
 logger = logging.getLogger(__name__)
@@ -167,6 +168,13 @@ def ensure_access_code_for_square_payment(
         logger.warning("Seam not configured for booking %s: %s", ref, e)
         repo.delete_by_id(doc["id"])
         backup = _build_backup_access_dict(visit_end_date=visit_end_date, reference_id=ref)
+        send_admin_access_code_failure_email(
+            reference_id=ref,
+            customer_name=customer_name,
+            customer_email=customer_email,
+            error_message=f"Seam API not configured: {e}",
+            guest_received_backup_pin=bool(backup),
+        )
         if backup:
             logger.warning("Using backup static PIN for reference %s (Seam not configured).", ref)
             return SquarePaymentAccessResult([backup], False, True)
@@ -182,6 +190,19 @@ def ensure_access_code_for_square_payment(
         )
         ac = resp.get("access_code") or {}
         aid = ac.get("access_code_id")
+        if not aid:
+            raise SeamAPIError(
+                "Seam access_codes/create did not return access_code_id",
+                body=resp,
+            )
+        if not getattr(settings, "SEAM_SKIP_ACCESS_CODE_SET_POLL", False):
+            seam.wait_until_access_code_set_on_device(
+                aid,
+                timeout_seconds=float(getattr(settings, "SEAM_ACCESS_CODE_SET_TIMEOUT_SECONDS", 120.0)),
+                poll_interval_seconds=float(
+                    getattr(settings, "SEAM_ACCESS_CODE_POLL_INTERVAL_SECONDS", 2.0)
+                ),
+            )
         patch_ok: dict[str, Any] = {
             "seam_access_code_id": aid,
             "seam_sync_status": "ok",
@@ -202,6 +223,14 @@ def ensure_access_code_for_square_payment(
             body,
         )
         backup = _build_backup_access_dict(visit_end_date=visit_end_date, reference_id=ref)
+        send_admin_access_code_failure_email(
+            reference_id=ref,
+            customer_name=customer_name,
+            customer_email=customer_email,
+            error_message=err,
+            error_body=body,
+            guest_received_backup_pin=bool(backup),
+        )
         if backup:
             logger.warning(
                 "Using backup static PIN for reference %s (lock label %r).",
