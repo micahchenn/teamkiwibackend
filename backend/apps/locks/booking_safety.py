@@ -32,7 +32,7 @@ def validate_booking_for_access_code(
     if not dates:
         return False, "invalid_visit_dates"
 
-    _visit_start, visit_end = dates
+    visit_start, visit_end = dates
     span_days = (visit_end - visit_start).days + 1
     if span_days < 1:
         return False, "invalid_visit_span"
