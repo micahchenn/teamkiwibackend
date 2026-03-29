@@ -181,9 +181,23 @@ SEAM_DEVICE_ID = (
 )
 # If set and SEAM_DEVICE_ID is empty, resolve device_id via Seam /devices/list (match display name).
 SEAM_DEVICE_NAME = os.environ.get("SEAM_DEVICE_NAME", "").strip() or None
-# When primary Seam PIN programming fails, email can include this 6-digit backup (must match the PIN on your backup lock in Seam; update env when admins change it).
+# When primary Seam PIN programming fails, one of these permanent access_code_ids (Seam Console → access code UUID) is picked at random per payment (shuffle + first successful get); duplicate env values are skipped.
+def _seam_backup_code_ids() -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for i in range(1, 6):
+        raw = (os.environ.get(f"SEAM_BACKUP_CODE_{i}_ID", "") or "").strip()
+        if not raw or raw in seen:
+            continue
+        seen.add(raw)
+        out.append(raw)
+    return out
+
+
+SEAM_BACKUP_CODE_IDS = _seam_backup_code_ids()
+# Optional fallback if SEAM_BACKUP_CODE_*_ID are unset or all get() calls fail: 6-digit PIN (legacy).
 SEAM_BACKUP_STATIC_CODE = os.environ.get("SEAM_BACKUP_STATIC_CODE", "").strip() or None
-# Label for the backup lock (Seam display name / email copy), e.g. KIWIBACKUPKEY.
+# Default label when a backup row has no Seam name (static fallback only; Seam backups use access code name from API).
 SEAM_BACKUP_LOCK_NAME = (os.environ.get("SEAM_BACKUP_LOCK_NAME", "") or "KIWIBACKUPKEY").strip() or "KIWIBACKUPKEY"
 # Override only if Seam documents a different base (default: https://connect.getseam.com)
 SEAM_API_BASE_URL = os.environ.get("SEAM_API_BASE_URL", "").strip()
@@ -205,6 +219,10 @@ SEAM_SKIP_ACCESS_CODE_SET_POLL = os.environ.get("SEAM_SKIP_ACCESS_CODE_SET_POLL"
     "true",
     "yes",
 )
+try:
+    SEAM_PIN_MAX_ATTEMPTS = max(1, int(os.environ.get("SEAM_PIN_MAX_ATTEMPTS", "5")))
+except ValueError:
+    SEAM_PIN_MAX_ATTEMPTS = 5
 SQUARE_ACCESS_TOKEN = os.environ.get("SQUARE_ACCESS_TOKEN", "")
 SQUARE_WEBHOOK_SECRET = os.environ.get("SQUARE_WEBHOOK_SECRET", "")
 # sandbox | production — matches Square Developer Dashboard

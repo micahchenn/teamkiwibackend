@@ -85,7 +85,7 @@ def send_admin_access_code_failure_email(
             "",
             "Guest outcome:",
             (
-                "Backup PIN was emailed to the guest (SEAM_BACKUP_STATIC_CODE)."
+                "A backup PIN was emailed to the guest (permanent Seam codes or static fallback)."
                 if guest_received_backup_pin
                 else "No backup PIN configured — guest did NOT receive a door code in email."
             ),

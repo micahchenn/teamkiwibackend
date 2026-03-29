@@ -9,6 +9,7 @@ Create or reuse lock access codes after a successful booking payment.
 from __future__ import annotations
 
 import logging
+import secrets
 from typing import Any, NamedTuple
 
 from django.conf import settings
@@ -20,9 +21,22 @@ from apps.locks.repository import get_access_code_repository
 from apps.locks.seam import get_seam_service
 from apps.locks.seam_resolve import resolve_seam_device_id_for_payment
 from services.email_service import send_admin_access_code_failure_email
-from services.seam_service import SeamAPIError
+from services.seam_service import SeamAPIError, SeamService
 
 logger = logging.getLogger(__name__)
+
+
+def _retryable_duplicate_pin(exc: SeamAPIError) -> bool:
+    """Kwikset duplicate PIN / conflict — new random code may succeed."""
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        for er in body.get("errors") or []:
+            if isinstance(er, dict) and er.get("error_code") == "kwikset_unable_to_confirm_code":
+                return True
+    msg = str(exc).lower()
+    if "kwikset_unable_to_confirm" in msg:
+        return True
+    return False
 
 
 def _normalize_backup_pin(raw: str | None) -> str | None:
@@ -35,28 +49,78 @@ def _normalize_backup_pin(raw: str | None) -> str | None:
     return digits
 
 
-def _build_backup_access_dict(*, visit_end_date, reference_id: str) -> dict[str, Any] | None:
+def _resolve_backup_access_for_email(
+    *,
+    seam: SeamService | None,
+    visit_end_date,
+    reference_id: str,
+) -> dict[str, Any] | None:
     """
-    Synthetic row for email only: admin-maintained PIN on the backup lock (see SEAM_BACKUP_LOCK_NAME).
-    Not persisted to Mongo.
+    Synthetic row for email only — not persisted to Mongo.
+
+    Configured ``SEAM_BACKUP_CODE_*_ID`` values are **shuffled** each time; the first
+    ``access_codes/get`` that returns a valid 6-digit code with no errors wins, so guests
+    spread across backups instead of always getting the same one. Falls back to
+    ``SEAM_BACKUP_STATIC_CODE`` if Seam is unavailable or every fetch fails.
     """
+    starts_at = utc_now()
+    expires_at = visit_end_to_expires_utc(visit_end_date)
+    base: dict[str, Any] = {
+        "starts_at": starts_at,
+        "expires_at": expires_at,
+        "booking_id": reference_id,
+        "status": "backup_static",
+        "seam_sync_status": "backup_static",
+        "lock_location": "Backup entry",
+    }
+
+    ids: list[str] = list(getattr(settings, "SEAM_BACKUP_CODE_IDS", None) or [])
+    if seam and ids:
+        shuffled = list(ids)
+        secrets.SystemRandom().shuffle(shuffled)
+        for aid in shuffled:
+            try:
+                ac = seam.get_access_code(aid)
+            except SeamAPIError as e:
+                logger.warning(
+                    "Seam backup access_codes/get failed for access_code_id=%s: %s",
+                    aid,
+                    e,
+                )
+                continue
+            errs = ac.get("errors")
+            if isinstance(errs, list) and len(errs) > 0:
+                logger.warning(
+                    "Seam backup access code %s has errors; trying next: %s",
+                    aid,
+                    errs,
+                )
+                continue
+            pin = _normalize_backup_pin(str(ac.get("code") or ""))
+            if not pin:
+                continue
+            label = (ac.get("name") or "").strip() or getattr(
+                settings, "SEAM_BACKUP_LOCK_NAME", "KIWIBACKUPKEY"
+            )
+            label = str(label).strip() or "KIWIBACKUPKEY"
+            return {
+                **base,
+                "id": f"backup-seam-{aid[:8]}",
+                "code": pin,
+                "lock_name": label,
+                "seam_backup_access_code_id": aid,
+            }
+
     pin = _normalize_backup_pin(getattr(settings, "SEAM_BACKUP_STATIC_CODE", None))
     if not pin:
         return None
     label = getattr(settings, "SEAM_BACKUP_LOCK_NAME", None) or "KIWIBACKUPKEY"
     label = str(label).strip() or "KIWIBACKUPKEY"
-    starts_at = utc_now()
-    expires_at = visit_end_to_expires_utc(visit_end_date)
     return {
+        **base,
         "id": "backup-static",
         "code": pin,
         "lock_name": label,
-        "lock_location": "Backup entry",
-        "starts_at": starts_at,
-        "expires_at": expires_at,
-        "status": "backup_static",
-        "seam_sync_status": "backup_static",
-        "booking_id": reference_id,
     }
 
 
@@ -65,7 +129,8 @@ class SquarePaymentAccessResult(NamedTuple):
     ``seam_sync_failed`` — primary timed PIN could not be programmed and no backup was available;
     skip confirmation email with access codes.
 
-    ``used_backup_access`` — guest email used ``SEAM_BACKUP_STATIC_CODE`` after primary Seam failed.
+    ``used_backup_access`` — guest email used a permanent Seam backup (``SEAM_BACKUP_CODE_*_ID``)
+    or ``SEAM_BACKUP_STATIC_CODE`` after primary Seam failed.
     """
 
     access_codes: list[dict[str, Any]]
@@ -87,10 +152,12 @@ def ensure_access_code_for_square_payment(
     Lock becomes active **immediately** at payment time; it expires at the end of
     ``visitEnd`` in the property timezone (not UTC midnight).
 
-    If the primary device is configured and Seam ``access_codes/create`` fails, the Mongo
-    document is removed. If ``SEAM_BACKUP_STATIC_CODE`` (6 digits) is set, that backup PIN
-    is emailed instead (not written to Mongo). Otherwise ``seam_sync_failed`` is True and
-    no access code is emailed.
+    If the primary device is configured and Seam fails (including Kwikset duplicate-PIN
+    errors), the Mongo row is removed and up to ``SEAM_PIN_MAX_ATTEMPTS`` new random codes
+    are tried. If all attempts fail, one of ``SEAM_BACKUP_CODE_1_ID`` … ``_5_ID`` is chosen at
+    random (shuffle, then first successful ``access_codes/get``); if none work,
+    ``SEAM_BACKUP_STATIC_CODE`` is used when set.
+    Otherwise ``seam_sync_failed`` is True and no access code is emailed.
     """
     repo = get_access_code_repository()
     ref = (reference_id or "").strip()
@@ -135,109 +202,143 @@ def ensure_access_code_for_square_payment(
     if booking:
         lock_name = (booking.get("product") or "").strip() or None
 
-    try:
-        doc = repo.create(
-            expires_at=expires_at,
-            starts_at=starts_at,
-            device_id=device_id,
-            lock_name=lock_name or "Stay",
-            lock_location=None,
-            booking_id=ref,
-            customer_name=customer_name,
-            customer_email=customer_email,
-            notes=None,
-            seam_access_code_id=None,
-        )
-    except (ValueError, RuntimeError) as e:
-        logger.exception("Could not create access code for booking %s: %s", ref, e)
-        return SquarePaymentAccessResult([], False)
+    max_pin_attempts = int(getattr(settings, "SEAM_PIN_MAX_ATTEMPTS", 5))
 
-    if not device_id:
-        return SquarePaymentAccessResult([doc], False)
-
-    base = doc.get("lock_name") or "Access"
-    name = seam_access_code_name(
-        doc["code"],
-        lock_name_base=base,
-        booking_reference=ref,
-        customer_name=customer_name,
-    )
-    try:
-        seam = get_seam_service()
-    except ValueError as e:
-        logger.warning("Seam not configured for booking %s: %s", ref, e)
-        repo.delete_by_id(doc["id"])
-        backup = _build_backup_access_dict(visit_end_date=visit_end_date, reference_id=ref)
-        send_admin_access_code_failure_email(
-            reference_id=ref,
-            customer_name=customer_name,
-            customer_email=customer_email,
-            error_message=f"Seam API not configured: {e}",
-            guest_received_backup_pin=bool(backup),
-        )
-        if backup:
-            logger.warning("Using backup static PIN for reference %s (Seam not configured).", ref)
-            return SquarePaymentAccessResult([backup], False, True)
-        return SquarePaymentAccessResult([], True)
-
-    try:
-        resp = seam.create_access_code(
-            device_id=device_id,
-            code=doc["code"],
-            name=name,
-            starts_at=starts_at,
-            ends_at=expires_at,
-        )
-        ac = resp.get("access_code") or {}
-        aid = ac.get("access_code_id")
-        if not aid:
-            raise SeamAPIError(
-                "Seam access_codes/create did not return access_code_id",
-                body=resp,
+    for attempt in range(1, max_pin_attempts + 1):
+        try:
+            doc = repo.create(
+                expires_at=expires_at,
+                starts_at=starts_at,
+                device_id=device_id,
+                lock_name=lock_name or "Stay",
+                lock_location=None,
+                booking_id=ref,
+                customer_name=customer_name,
+                customer_email=customer_email,
+                notes=None,
+                seam_access_code_id=None,
             )
-        if not getattr(settings, "SEAM_SKIP_ACCESS_CODE_SET_POLL", False):
-            seam.wait_until_access_code_set_on_device(
-                aid,
-                timeout_seconds=float(getattr(settings, "SEAM_ACCESS_CODE_SET_TIMEOUT_SECONDS", 120.0)),
-                poll_interval_seconds=float(
-                    getattr(settings, "SEAM_ACCESS_CODE_POLL_INTERVAL_SECONDS", 2.0)
-                ),
-            )
-        patch_ok: dict[str, Any] = {
-            "seam_access_code_id": aid,
-            "seam_sync_status": "ok",
-            "seam_sync_error": None,
-            "seam_error_body": None,
-            "starts_at": starts_at,
-            "expires_at": expires_at,
-        }
-        repo.patch_by_id(doc["id"], patch_ok)
-    except SeamAPIError as e:
-        err = str(e)[:2000]
-        body = getattr(e, "body", None)
-        repo.delete_by_id(doc["id"])
-        logger.warning(
-            "Seam access_codes/create failed for booking %s: %s body=%s",
-            ref,
-            err,
-            body,
-        )
-        backup = _build_backup_access_dict(visit_end_date=visit_end_date, reference_id=ref)
-        send_admin_access_code_failure_email(
-            reference_id=ref,
+        except (ValueError, RuntimeError) as e:
+            logger.exception("Could not create access code for booking %s: %s", ref, e)
+            return SquarePaymentAccessResult([], False)
+
+        if not device_id:
+            return SquarePaymentAccessResult([doc], False)
+
+        base = doc.get("lock_name") or "Access"
+        name = seam_access_code_name(
+            doc["code"],
+            lock_name_base=base,
+            booking_reference=ref,
             customer_name=customer_name,
-            customer_email=customer_email,
-            error_message=err,
-            error_body=body,
-            guest_received_backup_pin=bool(backup),
         )
-        if backup:
+        try:
+            seam = get_seam_service()
+        except ValueError as e:
+            logger.warning("Seam not configured for booking %s: %s", ref, e)
+            repo.delete_by_id(doc["id"])
+            backup = _resolve_backup_access_for_email(
+                seam=None,
+                visit_end_date=visit_end_date,
+                reference_id=ref,
+            )
+            send_admin_access_code_failure_email(
+                reference_id=ref,
+                customer_name=customer_name,
+                customer_email=customer_email,
+                error_message=f"Seam API not configured: {e}",
+                guest_received_backup_pin=bool(backup),
+            )
+            if backup:
+                logger.warning("Using backup static PIN for reference %s (Seam not configured).", ref)
+                return SquarePaymentAccessResult([backup], False, True)
+            return SquarePaymentAccessResult([], True)
+
+        last_aid: str | None = None
+        try:
+            resp = seam.create_access_code(
+                device_id=device_id,
+                code=doc["code"],
+                name=name,
+                starts_at=starts_at,
+                ends_at=expires_at,
+            )
+            ac = resp.get("access_code") or {}
+            aid = ac.get("access_code_id")
+            if not aid:
+                raise SeamAPIError(
+                    "Seam access_codes/create did not return access_code_id",
+                    body=resp,
+                )
+            last_aid = aid
+            if not getattr(settings, "SEAM_SKIP_ACCESS_CODE_SET_POLL", False):
+                seam.wait_until_access_code_set_on_device(
+                    aid,
+                    timeout_seconds=float(
+                        getattr(settings, "SEAM_ACCESS_CODE_SET_TIMEOUT_SECONDS", 120.0)
+                    ),
+                    poll_interval_seconds=float(
+                        getattr(settings, "SEAM_ACCESS_CODE_POLL_INTERVAL_SECONDS", 2.0)
+                    ),
+                )
+            patch_ok: dict[str, Any] = {
+                "seam_access_code_id": aid,
+                "seam_sync_status": "ok",
+                "seam_sync_error": None,
+                "seam_error_body": None,
+                "starts_at": starts_at,
+                "expires_at": expires_at,
+            }
+            repo.patch_by_id(doc["id"], patch_ok)
+        except SeamAPIError as e:
+            err = str(e)[:2000]
+            body = getattr(e, "body", None)
+            repo.delete_by_id(doc["id"])
+            if last_aid and device_id:
+                try:
+                    seam.delete_access_code(device_id, last_aid)
+                except SeamAPIError as del_exc:
+                    logger.warning(
+                        "Seam access_codes/delete failed for %s (booking %s): %s",
+                        last_aid,
+                        ref,
+                        del_exc,
+                    )
+            if _retryable_duplicate_pin(e) and attempt < max_pin_attempts:
+                logger.warning(
+                    "Seam PIN conflict for booking %s (attempt %s/%s), retrying with new code: %s",
+                    ref,
+                    attempt,
+                    max_pin_attempts,
+                    err,
+                )
+                continue
             logger.warning(
-                "Using backup static PIN for reference %s (lock label %r).",
+                "Seam access_codes/create failed for booking %s: %s body=%s",
                 ref,
-                backup.get("lock_name"),
+                err,
+                body,
             )
-            return SquarePaymentAccessResult([backup], False, True)
-        return SquarePaymentAccessResult([], True)
+            backup = _resolve_backup_access_for_email(
+                seam=seam,
+                visit_end_date=visit_end_date,
+                reference_id=ref,
+            )
+            send_admin_access_code_failure_email(
+                reference_id=ref,
+                customer_name=customer_name,
+                customer_email=customer_email,
+                error_message=err,
+                error_body=body,
+                guest_received_backup_pin=bool(backup),
+            )
+            if backup:
+                logger.warning(
+                    "Using backup PIN for reference %s (lock label %r).",
+                    ref,
+                    backup.get("lock_name"),
+                )
+                return SquarePaymentAccessResult([backup], False, True)
+            return SquarePaymentAccessResult([], True)
 
-    return SquarePaymentAccessResult([repo.get_by_id(doc["id"]) or doc], False)
+        return SquarePaymentAccessResult([repo.get_by_id(doc["id"]) or doc], False)

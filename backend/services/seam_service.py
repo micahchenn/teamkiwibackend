@@ -190,6 +190,13 @@ class SeamService:
             body=last,
         )
 
+    def delete_access_code(self, device_id: str, access_code_id: str) -> None:
+        """POST /access_codes/delete — remove a failed or obsolete access code in Seam."""
+        self._post(
+            "/access_codes/delete",
+            {"device_id": device_id, "access_code_id": access_code_id},
+        )
+
     def create_access_code(
         self,
         device_id: str,
