@@ -59,6 +59,19 @@ def _as_utc_aware(val: Any) -> datetime | None:
     return None
 
 
+def _booking_has_kids(booking: dict[str, Any] | None) -> bool:
+    """True when booking payload includes one or more children (BookingPayloadSerializer.children)."""
+    if not booking:
+        return False
+    raw = booking.get("children")
+    if raw is None:
+        return False
+    try:
+        return int(raw) >= 1
+    except (TypeError, ValueError):
+        return False
+
+
 def format_access_codes_for_template(docs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Rows for SendGrid {{#each access_codes}} — strings only for reliable JSON encoding."""
     tz_label = getattr(settings, "BOOKING_TIMEZONE", "America/Chicago")
@@ -91,6 +104,7 @@ def build_booking_dynamic_template_data(
     receipt_url: str | None,
     payment_status: str,
     access_code_docs: list[dict[str, Any]] | None = None,
+    booking: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Handlebars data for your SendGrid dynamic template (merge with template editor variables)."""
     name = (customer_name or "").strip() or "Guest"
@@ -100,6 +114,7 @@ def build_booking_dynamic_template_data(
     codes = format_access_codes_for_template(access_code_docs or [])
     first_code = codes[0]["code"] if codes else ""
     codes_joined = ", ".join(c["code"] for c in codes if c.get("code"))
+    has_kids = _booking_has_kids(booking)
 
     base: dict[str, Any] = {
         "customer_name": name,
@@ -114,6 +129,8 @@ def build_booking_dynamic_template_data(
         "access_code": first_code,
         "access_codes_list": codes_joined,
         "has_access_codes": bool(codes),
+        "booking_has_kids": has_kids,
+        "bookingHasKids": has_kids,
         # camelCase aliases for templates that prefer them
         "customerName": name,
         "referenceId": reference_id,
@@ -184,6 +201,7 @@ def send_booking_confirmation_email(
     receipt_url: str | None,
     payment_status: str,
     access_code_docs: list[dict[str, Any]] | None = None,
+    booking: dict[str, Any] | None = None,
 ) -> None:
     """Notify guest after Square payment. Uses dynamic template when SENDGRID_DEFAULT_TEMPLATE_ID is set."""
     to_email = (to_email or "").strip()
@@ -202,6 +220,7 @@ def send_booking_confirmation_email(
             receipt_url=receipt_url,
             payment_status=payment_status,
             access_code_docs=codes,
+            booking=booking,
         )
         try:
             send_dynamic_template_email(to_email, template_id, data)
@@ -229,6 +248,14 @@ def send_booking_confirmation_email(
         for row in format_access_codes_for_template(codes):
             lines.append(
                 f"  • {row['code']} ({row['lock_name']}) — active now through {row.get('expires_at_central') or row['expires_at']} (property time)"
+            )
+        if _booking_has_kids(booking):
+            lines.extend(
+                [
+                    "",
+                    "Children: This same door code may be used for children on your reservation. "
+                    "Anyone under 18 must be accompanied by a responsible adult at all times on the property.",
+                ]
             )
     lines.extend(["", "— Team Kiwi"])
     body = "\n".join(lines)
@@ -267,5 +294,6 @@ def send_template_test_email(to_email: str) -> None:
                 "status": "active",
             }
         ],
+        booking={"children": 1, "totalCents": 12345},
     )
     send_dynamic_template_email(to_email, template_id, data)

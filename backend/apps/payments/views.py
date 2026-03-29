@@ -154,6 +154,7 @@ class SquarePaymentView(APIView):
                 receipt_url=receipt_url,
                 payment_status=payment_status,
                 access_code_docs=access_codes,
+                booking=booking_dict,
             )
 
         lock_ok = bool(access_codes) and not seam_sync_failed

@@ -51,7 +51,11 @@
                     <p style="margin:0 0 16px;font-size:15px;line-height:1.5;color:#2c2c2c;">
                       <span style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:22px;font-weight:600;color:#1a3c34;letter-spacing:0.12em;">{{code}}</span>
                       <span style="display:block;margin-top:6px;font-size:14px;color:#555;">{{lock_name}}{{#if lock_location}} — {{lock_location}}{{/if}}</span>
-                      <span style="display:block;margin-top:4px;font-size:12px;color:#888;">Active immediately through {{expires_at_central}} ({{property_timezone}})</span>
+                      <span style="display:block;margin-top:8px;font-size:13px;color:#444;line-height:1.5;">
+                        <strong style="color:#1a3c34;">Door access</strong> (Central Time — CST/CDT)<br />
+                        From <strong>{{starts_at_central}}</strong><br />
+                        through <strong>{{expires_at_central}}</strong>
+                      </span>
                     </p>
                     {{/each}}
                     {{#if booking_has_kids}}
