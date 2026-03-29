@@ -139,6 +139,7 @@ class SquarePaymentView(APIView):
             )
         access_codes = provision.access_codes if provision else []
         seam_sync_failed = provision.seam_sync_failed if provision else False
+        used_backup_access = provision.used_backup_access if provision else False
 
         if (
             customer_email
@@ -160,9 +161,14 @@ class SquarePaymentView(APIView):
         lock_ok = bool(access_codes) and not seam_sync_failed
         lock_message = None
         if payment_status == "paid" and booking_dict and (booking_dict.get("visitStart") or booking_dict.get("visitEnd")):
-            if seam_sync_failed:
+            if used_backup_access:
                 lock_message = (
-                    "Payment succeeded, but the door code could not be programmed on the lock. "
+                    "The timed PIN could not be programmed on the primary lock; a backup entry code was sent by email. "
+                    "Contact us if you have trouble."
+                )
+            elif seam_sync_failed:
+                lock_message = (
+                    "Payment succeeded, but the door code could not be programmed on the lock and no backup code is configured. "
                     "Contact support with your reference number; do not assume access until confirmed."
                 )
             elif not access_codes:
@@ -184,6 +190,7 @@ class SquarePaymentView(APIView):
                     "ok": lock_ok,
                     "codesIssued": len(access_codes),
                     "seamSyncFailed": seam_sync_failed,
+                    "usedBackupAccess": used_backup_access,
                     "message": lock_message,
                 },
             },

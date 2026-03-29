@@ -14,27 +14,62 @@ from typing import Any, NamedTuple
 from django.conf import settings
 
 from apps.locks.access_code_name import seam_access_code_name
+from apps.locks.booking_safety import validate_booking_for_access_code
 from apps.locks.booking_timezone import parse_visit_dates, utc_now, visit_end_to_expires_utc
 from apps.locks.repository import get_access_code_repository
 from apps.locks.seam import get_seam_service
+from apps.locks.seam_resolve import resolve_seam_device_id_for_payment
 from services.seam_service import SeamAPIError
 
 logger = logging.getLogger(__name__)
 
 
+def _normalize_backup_pin(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    digits = "".join(c for c in str(raw) if c.isdigit())
+    if len(digits) != 6:
+        logger.warning("SEAM_BACKUP_STATIC_CODE must be exactly 6 digits; backup email disabled.")
+        return None
+    return digits
+
+
+def _build_backup_access_dict(*, visit_end_date, reference_id: str) -> dict[str, Any] | None:
+    """
+    Synthetic row for email only: admin-maintained PIN on the backup lock (see SEAM_BACKUP_LOCK_NAME).
+    Not persisted to Mongo.
+    """
+    pin = _normalize_backup_pin(getattr(settings, "SEAM_BACKUP_STATIC_CODE", None))
+    if not pin:
+        return None
+    label = getattr(settings, "SEAM_BACKUP_LOCK_NAME", None) or "KIWIBACKUPKEY"
+    label = str(label).strip() or "KIWIBACKUPKEY"
+    starts_at = utc_now()
+    expires_at = visit_end_to_expires_utc(visit_end_date)
+    return {
+        "id": "backup-static",
+        "code": pin,
+        "lock_name": label,
+        "lock_location": "Backup entry",
+        "starts_at": starts_at,
+        "expires_at": expires_at,
+        "status": "backup_static",
+        "seam_sync_status": "backup_static",
+        "booking_id": reference_id,
+    }
+
+
 class SquarePaymentAccessResult(NamedTuple):
-    """``seam_sync_failed`` means Seam was required but did not succeed — skip confirmation email."""
+    """
+    ``seam_sync_failed`` — primary timed PIN could not be programmed and no backup was available;
+    skip confirmation email with access codes.
+
+    ``used_backup_access`` — guest email used ``SEAM_BACKUP_STATIC_CODE`` after primary Seam failed.
+    """
 
     access_codes: list[dict[str, Any]]
     seam_sync_failed: bool
-
-
-def _device_id() -> str | None:
-    raw = getattr(settings, "SEAM_DEVICE_ID", None)
-    if raw is None:
-        return None
-    s = str(raw).strip()
-    return s or None
+    used_backup_access: bool = False
 
 
 def ensure_access_code_for_square_payment(
@@ -51,8 +86,10 @@ def ensure_access_code_for_square_payment(
     Lock becomes active **immediately** at payment time; it expires at the end of
     ``visitEnd`` in the property timezone (not UTC midnight).
 
-    If the device is configured and Seam sync does not succeed, the Mongo document is
-    removed and ``seam_sync_failed`` is True (caller should not send confirmation email).
+    If the primary device is configured and Seam ``access_codes/create`` fails, the Mongo
+    document is removed. If ``SEAM_BACKUP_STATIC_CODE`` (6 digits) is set, that backup PIN
+    is emailed instead (not written to Mongo). Otherwise ``seam_sync_failed`` is True and
+    no access code is emailed.
     """
     repo = get_access_code_repository()
     ref = (reference_id or "").strip()
@@ -71,6 +108,15 @@ def ensure_access_code_for_square_payment(
         )
         return SquarePaymentAccessResult([], False)
 
+    ok, reason = validate_booking_for_access_code(booking, parsed_dates=dates)
+    if not ok:
+        logger.warning(
+            "Access code blocked for reference %s: %s",
+            ref,
+            reason,
+        )
+        return SquarePaymentAccessResult([], False)
+
     _visit_start_date, visit_end_date = dates
     expires_at = visit_end_to_expires_utc(visit_end_date)
     starts_at = utc_now()
@@ -83,7 +129,7 @@ def ensure_access_code_for_square_payment(
         )
         return SquarePaymentAccessResult([], False)
 
-    device_id = _device_id()
+    device_id = resolve_seam_device_id_for_payment()
     lock_name = None
     if booking:
         lock_name = (booking.get("product") or "").strip() or None
@@ -113,12 +159,17 @@ def ensure_access_code_for_square_payment(
         doc["code"],
         lock_name_base=base,
         booking_reference=ref,
+        customer_name=customer_name,
     )
     try:
         seam = get_seam_service()
     except ValueError as e:
         logger.warning("Seam not configured for booking %s: %s", ref, e)
         repo.delete_by_id(doc["id"])
+        backup = _build_backup_access_dict(visit_end_date=visit_end_date, reference_id=ref)
+        if backup:
+            logger.warning("Using backup static PIN for reference %s (Seam not configured).", ref)
+            return SquarePaymentAccessResult([backup], False, True)
         return SquarePaymentAccessResult([], True)
 
     try:
@@ -150,6 +201,14 @@ def ensure_access_code_for_square_payment(
             err,
             body,
         )
+        backup = _build_backup_access_dict(visit_end_date=visit_end_date, reference_id=ref)
+        if backup:
+            logger.warning(
+                "Using backup static PIN for reference %s (lock label %r).",
+                ref,
+                backup.get("lock_name"),
+            )
+            return SquarePaymentAccessResult([backup], False, True)
         return SquarePaymentAccessResult([], True)
 
     return SquarePaymentAccessResult([repo.get_by_id(doc["id"]) or doc], False)

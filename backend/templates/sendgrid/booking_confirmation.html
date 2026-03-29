@@ -46,6 +46,15 @@
               <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin-top:24px;background-color:#eef6f4;border-radius:8px;border:1px solid #c5ddd6;">
                 <tr>
                   <td style="padding:18px 22px;">
+                    {{#if has_backup_access}}
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:0 0 16px;background-color:#fff8e8;border-radius:8px;border:1px solid #e6d49a;">
+                      <tr>
+                        <td style="padding:12px 14px;font-size:13px;line-height:1.5;color:#5c4a20;">
+                          <strong style="color:#1a3c34;">Backup entry</strong> — The timed PIN could not be programmed on the main lock automatically. Use the code below for your backup lock{{#if backup_lock_name}} (<strong>{{backup_lock_name}}</strong>){{/if}}. Contact us with your reference if you have trouble.
+                        </td>
+                      </tr>
+                    </table>
+                    {{/if}}
                     <p style="margin:0 0 14px;font-size:12px;letter-spacing:0.08em;text-transform:uppercase;color:#1a3c34;">Your door code(s)</p>
                     {{#each access_codes}}
                     <p style="margin:0 0 16px;font-size:15px;line-height:1.5;color:#2c2c2c;">

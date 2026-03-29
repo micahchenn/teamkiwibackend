@@ -8,10 +8,13 @@ Test connectivity: POST https://connect.getseam.com/workspaces/get with body {}
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_SEAM_BASE_URL = "https://connect.getseam.com"
 
@@ -87,6 +90,57 @@ class SeamService:
     def verify_connection(self) -> dict[str, Any]:
         """Alias for a clear name when checking deploy / env configuration."""
         return self.get_workspace()
+
+    def list_devices(self, body: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        """POST /devices/list — https://docs.seam.co/latest/api/devices/list"""
+        data = self._post("/devices/list", body or {})
+        devices = data.get("devices")
+        return devices if isinstance(devices, list) else []
+
+    def _device_name_candidates(self, device: dict[str, Any]) -> list[str]:
+        """Lowercased labels to match against SEAM_DEVICE_NAME (display name, nickname, etc.)."""
+        out: list[str] = []
+        for key in ("display_name", "nickname"):
+            v = device.get(key)
+            if isinstance(v, str) and v.strip():
+                out.append(v.strip().lower())
+        props = device.get("properties")
+        if isinstance(props, dict):
+            app = props.get("appearance")
+            if isinstance(app, dict):
+                n = app.get("name")
+                if isinstance(n, str) and n.strip():
+                    out.append(n.strip().lower())
+        return out
+
+    def find_device_id_by_display_name(self, name: str) -> str | None:
+        """
+        Resolve Seam ``device_id`` by human-readable device name (e.g. UI label "Grape").
+        Match is case-insensitive on display_name / nickname / properties.appearance.name.
+        If multiple devices match equally, the first listed device wins and a warning is logged.
+        """
+        want = (name or "").strip().lower()
+        if not want:
+            return None
+        matches: list[str] = []
+        for device in self.list_devices():
+            did = device.get("device_id")
+            if not isinstance(did, str) or not did.strip():
+                continue
+            for label in self._device_name_candidates(device):
+                if label == want:
+                    matches.append(did.strip())
+                    break
+        if not matches:
+            logger.warning("No Seam device found with display name matching %r", name)
+            return None
+        if len(matches) > 1:
+            logger.warning(
+                "Multiple Seam devices matched name %r; using first device_id=%s",
+                name,
+                matches[0],
+            )
+        return matches[0]
 
     def create_access_code(
         self,

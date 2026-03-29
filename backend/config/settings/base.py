@@ -173,8 +173,18 @@ CELERY_TASK_TIME_LIMIT = 60 * 30  # hard cap for runaway tasks
 
 # Integrations (placeholders for phase 2+)
 SEAM_API_KEY = os.environ.get("SEAM_API_KEY", "")
-# Default Seam lock when POST body omits device_id (optional).
-SEAM_DEVICE_ID = os.environ.get("DEVICE_ID", "").strip() or None
+# Default Seam lock UUID when POST body omits device_id (optional). Also accepts SEAM_DEVICE_ID.
+SEAM_DEVICE_ID = (
+    os.environ.get("SEAM_DEVICE_ID", "").strip()
+    or os.environ.get("DEVICE_ID", "").strip()
+    or None
+)
+# If set and SEAM_DEVICE_ID is empty, resolve device_id via Seam /devices/list (match display name).
+SEAM_DEVICE_NAME = os.environ.get("SEAM_DEVICE_NAME", "").strip() or None
+# When primary Seam PIN programming fails, email can include this 6-digit backup (must match the PIN on your backup lock in Seam; update env when admins change it).
+SEAM_BACKUP_STATIC_CODE = os.environ.get("SEAM_BACKUP_STATIC_CODE", "").strip() or None
+# Label for the backup lock (Seam display name / email copy), e.g. KIWIBACKUPKEY.
+SEAM_BACKUP_LOCK_NAME = (os.environ.get("SEAM_BACKUP_LOCK_NAME", "") or "KIWIBACKUPKEY").strip() or "KIWIBACKUPKEY"
 # Override only if Seam documents a different base (default: https://connect.getseam.com)
 SEAM_API_BASE_URL = os.environ.get("SEAM_API_BASE_URL", "").strip()
 SQUARE_ACCESS_TOKEN = os.environ.get("SQUARE_ACCESS_TOKEN", "")
@@ -210,6 +220,11 @@ DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "bookings@example.com"
 
 # Property calendar for visitStart/visitEnd (day-pass / nightly stays). Affects lock expiry (end of last day in this zone).
 BOOKING_TIMEZONE = (os.environ.get("BOOKING_TIMEZONE", "America/Chicago") or "America/Chicago").strip()
+# Max inclusive calendar-day span (visitStart→visitEnd) before access codes are refused (fraud / typo guard).
+try:
+    BOOKING_MAX_VISIT_SPAN_DAYS = int(os.environ.get("BOOKING_MAX_VISIT_SPAN_DAYS", "90"))
+except ValueError:
+    BOOKING_MAX_VISIT_SPAN_DAYS = 90
 
 # Staff / analytics API (GET /api/operations/summary/). Send header X-Operations-Key.
 OPERATIONS_API_KEY = os.environ.get("OPERATIONS_API_KEY", "").strip()

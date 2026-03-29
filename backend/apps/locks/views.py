@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from django.conf import settings
 from django.utils import timezone as dj_tz
 from rest_framework import status
 from rest_framework.response import Response
@@ -10,6 +9,7 @@ from apps.locks.access_code_name import seam_access_code_name
 from apps.locks.repository import get_access_code_repository
 from apps.locks.serializers import LockCodeCreateSerializer, LockCodeReadSerializer
 from apps.locks.seam import get_seam_service
+from apps.locks.seam_resolve import resolve_seam_device_id_for_payment
 from apps.locks.seam_window import clamp_seam_window
 from services.seam_service import SeamAPIError
 
@@ -22,9 +22,7 @@ class LockCodeCreateView(APIView):
         ser.is_valid(raise_exception=True)
         data = ser.validated_data
 
-        device_id = ser.clean_optional_str("device_id", data) or getattr(
-            settings, "SEAM_DEVICE_ID", None
-        )
+        device_id = ser.clean_optional_str("device_id", data) or resolve_seam_device_id_for_payment()
 
         repo = get_access_code_repository()
         try:
@@ -54,10 +52,12 @@ class LockCodeCreateView(APIView):
 
         if device_id and not prelinked_seam:
             base = doc.get("lock_name") or "Access"
+            cust = ser.clean_optional_str("customer_name", data) or doc.get("customer_name")
             name = seam_access_code_name(
                 doc["code"],
                 lock_name_base=base,
                 booking_reference=booking_ref,
+                customer_name=cust,
             )
             try:
                 seam = get_seam_service()

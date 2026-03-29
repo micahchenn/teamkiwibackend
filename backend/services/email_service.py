@@ -79,6 +79,7 @@ def format_access_codes_for_template(docs: list[dict[str, Any]]) -> list[dict[st
     for d in docs:
         su = _as_utc_aware(d.get("starts_at"))
         eu = _as_utc_aware(d.get("expires_at"))
+        is_backup = str(d.get("seam_sync_status") or "") == "backup_static"
         rows.append(
             {
                 "code": str(d.get("code") or ""),
@@ -90,6 +91,7 @@ def format_access_codes_for_template(docs: list[dict[str, Any]]) -> list[dict[st
                 "expires_at_central": format_dt_central(eu),
                 "property_timezone": tz_label,
                 "status": str(d.get("status") or ""),
+                "is_backup_static": is_backup,
             }
         )
     return rows
@@ -115,6 +117,13 @@ def build_booking_dynamic_template_data(
     first_code = codes[0]["code"] if codes else ""
     codes_joined = ", ".join(c["code"] for c in codes if c.get("code"))
     has_kids = _booking_has_kids(booking)
+    has_backup_access = any(c.get("is_backup_static") for c in codes)
+    backup_lock_name = ""
+    if has_backup_access:
+        for c in codes:
+            if c.get("is_backup_static"):
+                backup_lock_name = str(c.get("lock_name") or "").strip()
+                break
 
     base: dict[str, Any] = {
         "customer_name": name,
@@ -131,6 +140,10 @@ def build_booking_dynamic_template_data(
         "has_access_codes": bool(codes),
         "booking_has_kids": has_kids,
         "bookingHasKids": has_kids,
+        "has_backup_access": has_backup_access,
+        "hasBackupAccess": has_backup_access,
+        "backup_lock_name": backup_lock_name,
+        "backupLockName": backup_lock_name,
         # camelCase aliases for templates that prefer them
         "customerName": name,
         "referenceId": reference_id,
@@ -244,6 +257,15 @@ def send_booking_confirmation_email(
         lines.extend(["", f"Receipt: {receipt_url}"])
     if codes:
         lines.append("")
+        if any(
+            str(c.get("seam_sync_status") or "") == "backup_static"
+            for c in (access_code_docs or [])
+        ):
+            lines.append(
+                "BACKUP ENTRY: The timed door code could not be programmed automatically. "
+                "Use the backup code below (same as your on-site backup lock). "
+                "If anything is wrong, contact us with your reference number."
+            )
         lines.append("Your door code(s):")
         for row in format_access_codes_for_template(codes):
             lines.append(

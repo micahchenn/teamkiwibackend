@@ -165,13 +165,21 @@ Set **`SQUARE_LOCATION_ID`** in `.env` (Square Dashboard → Locations). **`SQUA
 | GET | `/api/square/config` | Returns `{ "applicationId", "locationId" }` for the card form. **503** + `{ "error" }` if not configured. |
 | POST | `/api/square/payments` | Body: `sourceId`, `amountCents`, `currency`, `referenceId` (UUID), optional `note`, `customerName`, `customerEmail`, `customerPhone`, `booking` (must include `totalCents` matching `amountCents`). |
 
+The optional **`booking`** object should include guest counts as numbers: **`adults`** and **`children`** (always send both; use `0` for no children). **`children` ≥ 1** turns on the children/door-code disclaimer in the SendGrid confirmation email; **`children: 0`** hides it. See **`docs/backend-crappie-guests.md`** at the repository root.
+
 **Success (200):** `{ "success", "paymentId", "status", "receiptUrl", "referenceId", "booking" }`. **Errors:** `{ "error": "..." }` with 400 / 502 as appropriate.
 
 **CORS (local):** `config.settings.local` allows `http://localhost:3000` and Vite `5173` by default.
 
 ## Lock codes (MongoDB + Seam)
 
-**Flow:** the API generates a **random 6-digit** code (`secrets`), saves it in MongoDB (`kiwiDB.lock_access_codes`), then—if the request includes a Seam **`device_id`** (in JSON or env **`DEVICE_ID`** as default)—calls Seam [`/access_codes/create`](https://docs.seam.co/latest/api/access_codes/create) to program that PIN on the lock for `starts_at` → `expires_at`. The JSON response includes **`seam_sync`**: `ok` | `failed` | `skipped` (skipped when `device_id` is omitted or you pre-filled `seam_access_code_id`).
+**Flow:** the API generates a **random 6-digit** code (`secrets`), saves it in MongoDB (`kiwiDB.lock_access_codes`), then—if the request includes a Seam **`device_id`** (in JSON or env **`DEVICE_ID`** / **`SEAM_DEVICE_ID`** as default)—calls Seam [`/access_codes/create`](https://docs.seam.co/latest/api/access_codes/create) to program that PIN on the lock for `starts_at` → `expires_at`. The JSON response includes **`seam_sync`**: `ok` | `failed` | `skipped` (skipped when `device_id` is omitted or you pre-filled `seam_access_code_id`).
+
+**Seam “named” locks:** The Seam API always targets a lock by **`device_id`** (UUID). If you name a device **Grape** in the Seam UI, set **`SEAM_DEVICE_NAME=Grape`** (and leave **`DEVICE_ID`** empty) so the backend resolves the UUID via [`/devices/list`](https://docs.seam.co/latest/api/devices/list). Matching is **case-insensitive** on display name / nickname / `properties.appearance.name`.
+
+**Square payment → access codes:** Before creating a code, the backend checks **`BOOKING_MAX_VISIT_SPAN_DAYS`** (default **90**), rejects stays whose **`visitEnd`** is already in the past (property timezone), and requires valid **`visitStart` / `visitEnd`**. Failed checks skip provisioning (no code, no email).
+
+**Primary Seam vs email:** Guests are only emailed a **primary** timed PIN after Seam **`access_codes/create`** succeeds (Mongo row kept). If that call fails (or **`SEAM_API_KEY`** is missing while a primary device is set), the random PIN is **discarded** — it is **not** emailed. If **`SEAM_BACKUP_STATIC_CODE`** is set to a **6-digit** PIN that matches your long-lived backup lock in Seam, the email can still include that **backup** code (label **`SEAM_BACKUP_LOCK_NAME`**, default **`KIWIBACKUPKEY`**). Update the env when you rotate the backup PIN on the lock. If no backup is configured, no door code is emailed.
 
 **Why you might not see a collection in Atlas:** MongoDB creates a collection on the **first insert**. Until you successfully **POST** at least one lock code, `lock_access_codes` will not appear. Confirm you are browsing database **`kiwiDB`** (not `test` or `admin`).
 
