@@ -66,6 +66,7 @@ INSTALLED_APPS = [
     "apps.payments",
     "apps.webhooks",
     "apps.notifications",
+    "apps.operations",
 ]
 
 MIDDLEWARE = [
@@ -209,3 +210,6 @@ DEFAULT_FROM_EMAIL = os.environ.get("DEFAULT_FROM_EMAIL", "bookings@example.com"
 
 # Property calendar for visitStart/visitEnd (day-pass / nightly stays). Affects lock expiry (end of last day in this zone).
 BOOKING_TIMEZONE = (os.environ.get("BOOKING_TIMEZONE", "America/Chicago") or "America/Chicago").strip()
+
+# Staff / analytics API (GET /api/operations/summary/). Send header X-Operations-Key.
+OPERATIONS_API_KEY = os.environ.get("OPERATIONS_API_KEY", "").strip()

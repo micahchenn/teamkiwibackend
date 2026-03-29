@@ -17,6 +17,7 @@ def api_root(_request):
             "health": "/api/health/",
             "square_config": "/api/square/config",
             "square_payments": "/api/square/payments",
+            "operations_summary": "/api/operations/summary/",
         }
     )
 
