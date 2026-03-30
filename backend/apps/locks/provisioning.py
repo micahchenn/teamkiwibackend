@@ -21,7 +21,7 @@ from apps.locks.repository import get_access_code_repository
 from apps.locks.seam import get_seam_service
 from apps.locks.seam_resolve import resolve_seam_device_id_for_payment
 from services.email_service import send_admin_access_code_failure_email
-from services.seam_service import SeamAPIError, SeamService
+from services.seam_service import SeamAPIError, SeamService, parse_seam_iso_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -262,6 +262,9 @@ def ensure_access_code_for_square_payment(
                 name=name,
                 starts_at=starts_at,
                 ends_at=expires_at,
+                prefer_native_scheduling=bool(
+                    getattr(settings, "SEAM_PREFER_NATIVE_SCHEDULING", False)
+                ),
             )
             ac = resp.get("access_code") or {}
             aid = ac.get("access_code_id")
@@ -272,7 +275,7 @@ def ensure_access_code_for_square_payment(
                 )
             last_aid = aid
             if not getattr(settings, "SEAM_SKIP_ACCESS_CODE_SET_POLL", False):
-                seam.wait_until_access_code_set_on_device(
+                final_ac = seam.wait_until_access_code_set_on_device(
                     aid,
                     timeout_seconds=float(
                         getattr(settings, "SEAM_ACCESS_CODE_SET_TIMEOUT_SECONDS", 120.0)
@@ -281,13 +284,17 @@ def ensure_access_code_for_square_payment(
                         getattr(settings, "SEAM_ACCESS_CODE_POLL_INTERVAL_SECONDS", 2.0)
                     ),
                 )
+            else:
+                final_ac = seam.get_access_code(aid)
+            seam_starts = parse_seam_iso_datetime(final_ac.get("starts_at"))
+            seam_ends = parse_seam_iso_datetime(final_ac.get("ends_at"))
             patch_ok: dict[str, Any] = {
                 "seam_access_code_id": aid,
                 "seam_sync_status": "ok",
                 "seam_sync_error": None,
                 "seam_error_body": None,
-                "starts_at": starts_at,
-                "expires_at": expires_at,
+                "starts_at": seam_starts or starts_at,
+                "expires_at": seam_ends or expires_at,
             }
             repo.patch_by_id(doc["id"], patch_ok)
         except SeamAPIError as e:

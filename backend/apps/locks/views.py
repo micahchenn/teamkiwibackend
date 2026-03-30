@@ -12,7 +12,7 @@ from apps.locks.serializers import LockCodeCreateSerializer, LockCodeReadSeriali
 from apps.locks.seam import get_seam_service
 from apps.locks.seam_resolve import resolve_seam_device_id_for_payment
 from apps.locks.seam_window import clamp_seam_window
-from services.seam_service import SeamAPIError
+from services.seam_service import SeamAPIError, parse_seam_iso_datetime
 
 
 class LockCodeCreateView(APIView):
@@ -86,6 +86,9 @@ class LockCodeCreateView(APIView):
                     name=name,
                     starts_at=seam_start,
                     ends_at=seam_end,
+                    prefer_native_scheduling=bool(
+                        getattr(settings, "SEAM_PREFER_NATIVE_SCHEDULING", False)
+                    ),
                 )
                 ac = resp.get("access_code") or {}
                 aid = ac.get("access_code_id")
@@ -95,7 +98,7 @@ class LockCodeCreateView(APIView):
                         body=resp,
                     )
                 if not getattr(settings, "SEAM_SKIP_ACCESS_CODE_SET_POLL", False):
-                    seam.wait_until_access_code_set_on_device(
+                    final_ac = seam.wait_until_access_code_set_on_device(
                         aid,
                         timeout_seconds=float(
                             getattr(settings, "SEAM_ACCESS_CODE_SET_TIMEOUT_SECONDS", 120.0)
@@ -104,6 +107,10 @@ class LockCodeCreateView(APIView):
                             getattr(settings, "SEAM_ACCESS_CODE_POLL_INTERVAL_SECONDS", 2.0)
                         ),
                     )
+                else:
+                    final_ac = seam.get_access_code(aid)
+                seam_start_eff = parse_seam_iso_datetime(final_ac.get("starts_at")) or seam_start
+                seam_end_eff = parse_seam_iso_datetime(final_ac.get("ends_at")) or seam_end
                 repo.patch_by_id(
                     doc["id"],
                     {
@@ -111,14 +118,16 @@ class LockCodeCreateView(APIView):
                         "seam_sync_status": "ok",
                         "seam_sync_error": None,
                         "seam_error_body": None,
-                        "starts_at": seam_start,
+                        "starts_at": seam_start_eff,
+                        "expires_at": seam_end_eff,
                     },
                 )
                 out.update(
                     seam_sync="ok",
                     seam_access_code_id=aid,
                     seam_sync_status="ok",
-                    starts_at=seam_start,
+                    starts_at=seam_start_eff,
+                    expires_at=seam_end_eff,
                 )
             except SeamAPIError as e:
                 err = str(e)[:2000]

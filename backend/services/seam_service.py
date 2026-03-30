@@ -29,6 +29,30 @@ def _iso_utc_z(dt: datetime) -> str:
     return s.replace("+00:00", "Z")
 
 
+def parse_seam_iso_datetime(value: object) -> datetime | None:
+    """Parse ``starts_at`` / ``ends_at`` from Seam access code JSON (ISO 8601, often ``...Z``)."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+    if not isinstance(value, str):
+        return None
+    s = value.strip()
+    if not s:
+        return None
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 class SeamAPIError(Exception):
     def __init__(self, message: str, *, status_code: int | None = None, body: Any = None):
         super().__init__(message)
@@ -205,10 +229,15 @@ class SeamService:
         name: str,
         starts_at: datetime,
         ends_at: datetime,
+        prefer_native_scheduling: bool = False,
     ) -> dict[str, Any]:
         """
         Program a PIN on the lock via Seam (time-bound window).
         https://docs.seam.co/latest/api/access_codes/create
+
+        ``prefer_native_scheduling`` defaults to False so Kwikset and similar devices use
+        just-in-time scheduling instead of native slot alignment (which can delay activation
+        by minutes after ``starts_at``).
         """
         body: dict[str, Any] = {
             "device_id": device_id,
@@ -216,5 +245,6 @@ class SeamService:
             "name": name,
             "starts_at": _iso_utc_z(starts_at),
             "ends_at": _iso_utc_z(ends_at),
+            "prefer_native_scheduling": prefer_native_scheduling,
         }
         return self._post("/access_codes/create", body)

@@ -219,6 +219,13 @@ SEAM_SKIP_ACCESS_CODE_SET_POLL = os.environ.get("SEAM_SKIP_ACCESS_CODE_SET_POLL"
     "true",
     "yes",
 )
+# True = native device scheduling (Seam default; Kwikset may round activation several minutes after your starts_at).
+# False = just-in-time — better for guests who pay and need the PIN immediately.
+SEAM_PREFER_NATIVE_SCHEDULING = os.environ.get("SEAM_PREFER_NATIVE_SCHEDULING", "").lower() in (
+    "1",
+    "true",
+    "yes",
+)
 try:
     SEAM_PIN_MAX_ATTEMPTS = max(1, int(os.environ.get("SEAM_PIN_MAX_ATTEMPTS", "5")))
 except ValueError:
