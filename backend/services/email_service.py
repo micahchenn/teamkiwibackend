@@ -234,11 +234,15 @@ def build_booking_dynamic_template_data(
 
 
 def send_dynamic_template_email(
-    to_email: str,
+    to_email: str | list[str],
     template_id: str,
     dynamic_template_data: dict[str, Any],
 ) -> None:
-    """POST https://api.sendgrid.com/v3/mail/send with Bearer API key."""
+    """POST https://api.sendgrid.com/v3/mail/send with Bearer API key.
+
+    One or many ``to`` addresses — multiple recipients use one request (one personalization
+    per inbox, same ``dynamic_template_data`` each).
+    """
     api_key = _sendgrid_api_key()
     if not api_key:
         raise ValueError("SENDGRID_API_KEY is not set.")
@@ -247,13 +251,18 @@ def send_dynamic_template_email(
     if not from_email:
         raise ValueError("DEFAULT_FROM_EMAIL is not set.")
 
+    if isinstance(to_email, str):
+        recipients = [to_email.strip()] if to_email.strip() else []
+    else:
+        recipients = [str(e).strip() for e in to_email if e and str(e).strip()]
+    if not recipients:
+        raise ValueError("No recipient emails for SendGrid template send.")
+
     from_name = (getattr(settings, "SENDGRID_FROM_NAME", None) or "Team Kiwi").strip()
     payload: dict[str, Any] = {
         "personalizations": [
-            {
-                "to": [{"email": to_email.strip()}],
-                "dynamic_template_data": dynamic_template_data,
-            }
+            {"to": [{"email": e}], "dynamic_template_data": dynamic_template_data}
+            for e in recipients
         ],
         "from": {"email": from_email, "name": from_name},
         "template_id": template_id.strip(),
@@ -269,51 +278,87 @@ def send_dynamic_template_email(
             "SendGrid template send failed: %s from=%s to=%s body=%s",
             r.status_code,
             from_email,
-            to_email,
+            ", ".join(recipients[:12]),
             r.text,
         )
         r.raise_for_status()
 
 
-def collect_booking_confirmation_recipients(
-    customer_email: str | None,
-    booking: dict[str, Any] | None,
-) -> list[str]:
-    """
-    Emails that should receive the booking confirmation (same content).
+def _add_recipient_emails(
+    seen: set[str],
+    ordered: list[str],
+    raw: Any,
+) -> None:
+    """Normalize strings, lists of strings, or comma-separated string into ``ordered`` (deduped)."""
 
-    Includes the payer ``customerEmail`` plus optional ``booking.guestEmails`` (list or
-    comma/semicolon-separated string). Deduped case-insensitively; payer first when present.
-    """
-    seen: set[str] = set()
-    ordered: list[str] = []
-
-    def _add(raw: str | None) -> None:
-        if not raw or not str(raw).strip():
+    def _add_one(addr: str | None) -> None:
+        if not addr or not str(addr).strip():
             return
-        e = str(raw).strip()
+        e = str(addr).strip()
         key = e.lower()
         if key in seen:
             return
         seen.add(key)
         ordered.append(e)
 
-    _add(customer_email)
+    if raw is None:
+        return
+    if isinstance(raw, str):
+        for part in raw.replace(";", ",").split(","):
+            _add_one(part)
+        return
+    if isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, str):
+                _add_one(item)
+            elif isinstance(item, dict):
+                e = item.get("email") or item.get("Email")
+                _add_one(e if isinstance(e, str) else None)
+
+
+def collect_booking_confirmation_recipients(
+    customer_email: str | None,
+    booking: dict[str, Any] | None,
+    *,
+    top_level_guest_emails: list[str] | None = None,
+) -> list[str]:
+    """
+    Emails that should receive the booking confirmation (same content).
+
+    Includes the payer ``customerEmail``, optional top-level ``guestEmails`` from the payment
+    payload, and any of these on ``booking``: ``guestEmails``, ``guest_emails``,
+    ``additionalEmails``, ``additional_emails``, ``ccEmails``, ``emails``, or ``users``
+    (list of strings or ``{ "email": "..." }``). Deduped case-insensitively; payer first when present.
+    """
+    seen: set[str] = set()
+    ordered: list[str] = []
+
+    _add_recipient_emails(seen, ordered, customer_email)
+    _add_recipient_emails(seen, ordered, top_level_guest_emails)
+
     if not booking:
         return ordered
-    extras = booking.get("guestEmails") or booking.get("guest_emails")
-    if isinstance(extras, str):
-        for part in extras.replace(";", ",").split(","):
-            _add(part)
-    elif isinstance(extras, list):
-        for item in extras:
-            if isinstance(item, str):
-                _add(item)
+
+    for key in (
+        "guestEmails",
+        "guest_emails",
+        "additionalEmails",
+        "additional_emails",
+        "ccEmails",
+        "cc_emails",
+        "emails",
+    ):
+        _add_recipient_emails(seen, ordered, booking.get(key))
+
+    users = booking.get("users")
+    if isinstance(users, list):
+        _add_recipient_emails(seen, ordered, users)
+
     return ordered
 
 
 def send_booking_confirmation_email(
-    to_email: str,
+    to_email: str | list[str],
     *,
     customer_name: str | None,
     reference_id: str,
@@ -324,9 +369,12 @@ def send_booking_confirmation_email(
     access_code_docs: list[dict[str, Any]] | None = None,
     booking: dict[str, Any] | None = None,
 ) -> None:
-    """Notify guest after Square payment. Uses dynamic template when SENDGRID_DEFAULT_TEMPLATE_ID is set."""
-    to_email = (to_email or "").strip()
-    if not to_email:
+    """Notify guest(s) after Square payment. Uses dynamic template when SENDGRID_DEFAULT_TEMPLATE_ID is set."""
+    if isinstance(to_email, str):
+        recipients = [to_email.strip()] if (to_email or "").strip() else []
+    else:
+        recipients = [str(e).strip() for e in to_email if e and str(e).strip()]
+    if not recipients:
         return
 
     template_id = (getattr(settings, "SENDGRID_DEFAULT_TEMPLATE_ID", None) or "").strip()
@@ -344,9 +392,12 @@ def send_booking_confirmation_email(
             booking=booking,
         )
         try:
-            send_dynamic_template_email(to_email, template_id, data)
+            send_dynamic_template_email(recipients, template_id, data)
         except Exception:
-            logger.exception("Failed to send booking template email to %s", to_email)
+            logger.exception(
+                "Failed to send booking template email to %s",
+                ", ".join(recipients[:12]),
+            )
         return
 
     if not _smtp_configured():
@@ -390,16 +441,17 @@ def send_booking_confirmation_email(
     lines.extend(["", "— Team Kiwi"])
     body = "\n".join(lines)
 
-    try:
-        send_mail(
-            subject=f"Booking confirmed — {reference_id}",
-            message=body,
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[to_email],
-            fail_silently=False,
-        )
-    except Exception:
-        logger.exception("Failed to send booking confirmation to %s", to_email)
+    for addr in recipients:
+        try:
+            send_mail(
+                subject=f"Booking confirmed — {reference_id}",
+                message=body,
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[addr],
+                fail_silently=False,
+            )
+        except Exception:
+            logger.exception("Failed to send booking confirmation to %s", addr)
 
 
 def send_template_test_email(to_email: str) -> None:

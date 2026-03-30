@@ -145,9 +145,14 @@ class SquarePaymentView(APIView):
         used_backup_access = provision.used_backup_access if provision else False
 
         if payment_status == "paid" and not seam_sync_failed:
-            for to_addr in collect_booking_confirmation_recipients(customer_email, booking_dict):
+            recipients = collect_booking_confirmation_recipients(
+                customer_email,
+                booking_dict,
+                top_level_guest_emails=d.get("guestEmails") or None,
+            )
+            if recipients:
                 send_booking_confirmation_email(
-                    to_addr,
+                    recipients,
                     customer_name=(d.get("customerName") or "").strip() or None,
                     reference_id=reference_id,
                     amount_cents=amount_cents,

@@ -33,6 +33,13 @@ class SquarePaymentRequestSerializer(serializers.Serializer):
     customerName = serializers.CharField(required=False, allow_blank=True, default="")
     customerEmail = serializers.EmailField(required=False, allow_blank=True, default="")
     customerPhone = serializers.CharField(required=False, allow_blank=True, default="", max_length=32)
+    # Extra confirmation recipients (same as booking.guestEmails). Many clients send these at top level.
+    guestEmails = serializers.ListField(
+        child=serializers.EmailField(),
+        required=False,
+        allow_empty=True,
+        default=list,
+    )
     booking = BookingPayloadSerializer(required=False, allow_null=True)
 
     def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
